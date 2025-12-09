@@ -167,14 +167,24 @@ public class AuthController {
     }
 
     /**
-     * Extract client IP address, considering X-Forwarded-For header for proxied requests
+     * Extract client IP address securely for rate limiting.
+     *
+     * Security: X-Forwarded-For can be spoofed by clients. We prefer X-Real-IP
+     * which is set by our nginx reverse proxy and cannot be manipulated.
+     *
+     * Priority: X-Real-IP (nginx) > Remote Address
+     *
+     * Note: X-Forwarded-For is intentionally NOT used for rate limiting as it
+     * can be easily spoofed to bypass rate limits.
      */
     private String getClientIpAddress(HttpServletRequest request) {
-        String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
-            // Take the first IP in the chain (original client)
-            return xForwardedFor.split(",")[0].trim();
+        // X-Real-IP is set by nginx and cannot be spoofed by clients
+        String xRealIp = request.getHeader("X-Real-IP");
+        if (xRealIp != null && !xRealIp.isBlank()) {
+            return xRealIp.trim();
         }
+
+        // Fall back to remote address (direct connection or local development)
         return request.getRemoteAddr();
     }
 

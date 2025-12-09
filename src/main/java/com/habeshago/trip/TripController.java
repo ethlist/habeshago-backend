@@ -72,7 +72,9 @@ public class TripController {
     }
 
     @GetMapping("/trips/{id}")
-    public ResponseEntity<TripDto> getTrip(@PathVariable Long id) {
+    public ResponseEntity<TripDto> getTrip(HttpServletRequest request, @PathVariable Long id) {
+        // Require authentication to protect traveler data from scrapers
+        requireCurrentUser(request);
         return ResponseEntity.ok(tripService.getTrip(id));
     }
 

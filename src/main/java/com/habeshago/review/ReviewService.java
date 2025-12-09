@@ -11,6 +11,9 @@ import com.habeshago.review.dto.CreateReviewRequest;
 import com.habeshago.review.dto.ReviewDto;
 import com.habeshago.user.User;
 import com.habeshago.user.UserRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -22,6 +25,8 @@ import java.util.List;
 @Service
 @Transactional
 public class ReviewService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReviewService.class);
 
     private final ReviewRepository reviewRepository;
     private final ItemRequestRepository itemRequestRepository;
@@ -50,7 +55,7 @@ public class ReviewService {
             throw new BadRequestException("Can only review delivered requests");
         }
 
-        // Check if review already exists
+        // Check if review already exists (optimistic check)
         if (reviewRepository.existsByItemRequestIdAndReviewerId(requestId, reviewerId)) {
             throw new ConflictException("You have already reviewed this request");
         }
@@ -69,7 +74,14 @@ public class ReviewService {
         review.setRating(request.rating());
         review.setComment(request.comment());
 
-        review = reviewRepository.save(review);
+        try {
+            review = reviewRepository.save(review);
+        } catch (DataIntegrityViolationException e) {
+            // Handle race condition: another request created the review concurrently
+            log.warn("Duplicate review attempt for request {} by user {} - caught by DB constraint",
+                    requestId, reviewerId);
+            throw new ConflictException("You have already reviewed this request");
+        }
 
         // Update traveler's rating
         updateTravelerRating(traveler, request.rating());
@@ -77,22 +89,12 @@ public class ReviewService {
         return ReviewDto.from(review);
     }
 
+    /**
+     * Update traveler rating using atomic database operation to prevent race conditions.
+     * This ensures consistent results when multiple reviews are submitted concurrently.
+     */
     private void updateTravelerRating(User traveler, int newRating) {
-        int oldCount = traveler.getRatingCount();
-        Double oldAverage = traveler.getRatingAverage();
-
-        int newCount = oldCount + 1;
-        double newAverage;
-
-        if (oldAverage == null || oldCount == 0) {
-            newAverage = newRating;
-        } else {
-            newAverage = ((oldAverage * oldCount) + newRating) / newCount;
-        }
-
-        traveler.setRatingCount(newCount);
-        traveler.setRatingAverage(newAverage);
-        userRepository.save(traveler);
+        userRepository.updateRatingAtomically(traveler.getId(), newRating);
     }
 
     @Transactional(readOnly = true)

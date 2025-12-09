@@ -26,6 +26,12 @@ public class TripService {
 
     @Transactional
     public TripDto createTrip(User currentUser, TripCreateRequest req) {
+        // Validate arrival date is on or after departure date
+        if (req.getArrivalDate() != null && req.getDepartureDate() != null
+                && req.getArrivalDate().isBefore(req.getDepartureDate())) {
+            throw new BadRequestException("Arrival date cannot be before departure date");
+        }
+
         Trip trip = new Trip();
         trip.setUser(currentUser);
         trip.setFromCity(req.getFromCity());

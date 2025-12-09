@@ -44,6 +44,16 @@ public class NotificationService {
 
         for (NotificationOutbox entry : pending) {
             try {
+                // Skip notifications for users without Telegram ID (web-only users)
+                Long telegramUserId = entry.getUser().getTelegramUserId();
+                if (telegramUserId == null) {
+                    log.debug("Skipping Telegram notification {} for web user {} (no Telegram ID)",
+                            entry.getId(), entry.getUser().getId());
+                    entry.setStatus(OutboxStatus.SENT); // Mark as sent to avoid retries
+                    outboxRepository.save(entry);
+                    continue;
+                }
+
                 entry.setStatus(OutboxStatus.SENDING);
                 outboxRepository.save(entry);
 
@@ -51,7 +61,7 @@ public class NotificationService {
                 TelegramMessage message = messageFormatter.formatNotification(entry);
 
                 // Send with formatting and inline keyboard if present
-                telegramClient.sendMessage(message, entry.getUser().getTelegramUserId());
+                telegramClient.sendMessage(message, telegramUserId);
 
                 entry.setStatus(OutboxStatus.SENT);
                 outboxRepository.save(entry);
