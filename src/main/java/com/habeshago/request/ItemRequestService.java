@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.habeshago.common.BadRequestException;
 import com.habeshago.common.ForbiddenException;
 import com.habeshago.common.NotFoundException;
+import com.habeshago.notification.Notification;
 import com.habeshago.notification.NotificationOutbox;
+import com.habeshago.notification.NotificationRepository;
 import com.habeshago.notification.NotificationService;
 import com.habeshago.trip.Trip;
 import com.habeshago.trip.TripRepository;
@@ -27,16 +29,19 @@ public class ItemRequestService {
     private final TripRepository tripRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final NotificationRepository notificationRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public ItemRequestService(ItemRequestRepository itemRequestRepository,
                               TripRepository tripRepository,
                               UserRepository userRepository,
-                              NotificationService notificationService) {
+                              NotificationService notificationService,
+                              NotificationRepository notificationRepository) {
         this.itemRequestRepository = itemRequestRepository;
         this.tripRepository = tripRepository;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
+        this.notificationRepository = notificationRepository;
     }
 
     @Transactional
@@ -303,6 +308,10 @@ public class ItemRequestService {
     }
 
     private void enqueueNotification(User user, String type, Map<String, Object> payload) {
+        // 1. Create in-app notification (for all users)
+        createInAppNotification(user, type, payload);
+
+        // 2. Enqueue Telegram notification (will be sent if user has Telegram ID)
         NotificationOutbox outbox = new NotificationOutbox();
         outbox.setUser(user);
         outbox.setType(type);
@@ -312,5 +321,75 @@ public class ItemRequestService {
             outbox.setPayload("{}");
         }
         notificationService.enqueueNotification(outbox);
+    }
+
+    private void createInAppNotification(User user, String type, Map<String, Object> payload) {
+        Notification notification = new Notification();
+        notification.setUser(user);
+        notification.setType(type);
+
+        // Extract title and message from payload
+        String title = (String) payload.getOrDefault("title", getDefaultTitle(type));
+        notification.setTitle(title);
+
+        // Build message from payload
+        String message = buildNotificationMessage(type, payload);
+        notification.setMessage(message);
+
+        // Build action URL based on notification type
+        String actionUrl = buildActionUrl(type, payload);
+        notification.setActionUrl(actionUrl);
+
+        notificationRepository.save(notification);
+    }
+
+    private String getDefaultTitle(String type) {
+        return switch (type) {
+            case "NEW_REQUEST" -> "New item request";
+            case "REQUEST_ACCEPTED" -> "Request accepted";
+            case "REQUEST_ACCEPTED_TRAVELER" -> "You accepted a request";
+            case "REQUEST_REJECTED" -> "Request not accepted";
+            case "REQUEST_DELIVERED" -> "Item delivered";
+            default -> "Notification";
+        };
+    }
+
+    private String buildNotificationMessage(String type, Map<String, Object> payload) {
+        String itemDesc = (String) payload.get("itemDescription");
+        String route = (String) payload.get("route");
+
+        return switch (type) {
+            case "NEW_REQUEST" -> {
+                String senderName = (String) payload.get("senderFirstName");
+                yield senderName + " wants to send: " + itemDesc + " (" + route + ")";
+            }
+            case "REQUEST_ACCEPTED" -> {
+                String travelerName = (String) payload.get("travelerFirstName");
+                yield travelerName + " will carry your " + itemDesc + " (" + route + ")";
+            }
+            case "REQUEST_ACCEPTED_TRAVELER" -> {
+                String senderName = (String) payload.get("senderFirstName");
+                yield "You'll carry " + itemDesc + " for " + senderName;
+            }
+            case "REQUEST_REJECTED" ->
+                "Your request for " + itemDesc + " was not accepted (" + route + ")";
+            case "REQUEST_DELIVERED" -> {
+                String travelerName = (String) payload.get("travelerFirstName");
+                yield "Your " + itemDesc + " was delivered by " + travelerName;
+            }
+            default -> (String) payload.getOrDefault("message", "You have a notification");
+        };
+    }
+
+    private String buildActionUrl(String type, Map<String, Object> payload) {
+        Object requestId = payload.get("requestId");
+        Object tripId = payload.get("tripId");
+
+        return switch (type) {
+            case "NEW_REQUEST" -> tripId != null ? "/trips/" + tripId : null;
+            case "REQUEST_ACCEPTED", "REQUEST_ACCEPTED_TRAVELER", "REQUEST_REJECTED", "REQUEST_DELIVERED" ->
+                requestId != null ? "/requests/" + requestId : null;
+            default -> null;
+        };
     }
 }
