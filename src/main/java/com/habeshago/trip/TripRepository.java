@@ -19,15 +19,16 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
             TripStatus status
     );
 
-    @Query("SELECT t FROM Trip t WHERE t.status = :status " +
-           "AND (:fromCity IS NULL OR LOWER(t.fromCity) LIKE LOWER(CONCAT('%', :fromCity, '%'))) " +
-           "AND (:toCity IS NULL OR LOWER(t.toCity) LIKE LOWER(CONCAT('%', :toCity, '%'))) " +
-           "AND (:departureDate IS NULL OR t.departureDate = :departureDate) " +
-           "ORDER BY t.departureDate ASC")
+    @Query(value = "SELECT * FROM trips t WHERE t.status = CAST(:status AS VARCHAR) " +
+           "AND (CAST(:fromCity AS VARCHAR) IS NULL OR CAST(:fromCity AS VARCHAR) = '' OR LOWER(t.from_city) LIKE LOWER(CONCAT('%', CAST(:fromCity AS VARCHAR), '%'))) " +
+           "AND (CAST(:toCity AS VARCHAR) IS NULL OR CAST(:toCity AS VARCHAR) = '' OR LOWER(t.to_city) LIKE LOWER(CONCAT('%', CAST(:toCity AS VARCHAR), '%'))) " +
+           "AND (CAST(:departureDate AS DATE) IS NULL OR t.departure_date = CAST(:departureDate AS DATE)) " +
+           "ORDER BY t.departure_date ASC",
+           nativeQuery = true)
     List<Trip> searchTrips(
             @Param("fromCity") String fromCity,
             @Param("toCity") String toCity,
             @Param("departureDate") LocalDate departureDate,
-            @Param("status") TripStatus status
+            @Param("status") String status
     );
 }

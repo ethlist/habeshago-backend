@@ -79,7 +79,7 @@ public class TripService {
             capType = CapacityType.valueOf(capacityType);
         }
 
-        List<Trip> trips = tripRepository.searchTrips(from, to, departureDate, TripStatus.OPEN);
+        List<Trip> trips = tripRepository.searchTrips(from, to, departureDate, TripStatus.OPEN.name());
 
         // capacityType filter at app level if provided
         final CapacityType finalCapType = capType;
