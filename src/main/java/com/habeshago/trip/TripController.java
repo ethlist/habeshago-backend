@@ -6,6 +6,7 @@ import com.habeshago.trip.dto.TripDto;
 import com.habeshago.user.User;
 import com.habeshago.user.UserDto;
 import com.habeshago.user.LanguageUpdateRequest;
+import com.habeshago.user.ProfileUpdateRequest;
 import com.habeshago.user.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -51,6 +52,27 @@ public class TripController {
             @Valid @RequestBody LanguageUpdateRequest body) {
         User user = requireCurrentUser(request);
         user.setPreferredLanguage(body.getLanguage());
+        User saved = userRepository.save(user);
+        return ResponseEntity.ok(UserDto.from(saved));
+    }
+
+    @PutMapping("/me/profile")
+    public ResponseEntity<UserDto> updateProfile(
+            HttpServletRequest request,
+            @RequestBody ProfileUpdateRequest body) {
+        User user = requireCurrentUser(request);
+        
+        // Only update fields that are provided (not null)
+        if (body.getFirstName() != null) {
+            user.setFirstName(body.getFirstName());
+        }
+        if (body.getLastName() != null) {
+            user.setLastName(body.getLastName());
+        }
+        if (body.getUsername() != null) {
+            user.setUsername(body.getUsername());
+        }
+        
         User saved = userRepository.save(user);
         return ResponseEntity.ok(UserDto.from(saved));
     }
