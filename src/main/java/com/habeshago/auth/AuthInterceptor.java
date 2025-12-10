@@ -44,6 +44,11 @@ public class AuthInterceptor implements HandlerInterceptor {
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws IOException {
         String path = request.getRequestURI();
 
+        // Skip auth for CORS preflight requests (OPTIONS)
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return true;
+        }
+
         // Skip auth for public endpoints
         if (isPublicEndpoint(path)) {
             return true;
