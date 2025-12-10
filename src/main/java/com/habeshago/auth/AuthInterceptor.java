@@ -99,6 +99,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         return path.startsWith("/api/auth/") ||
                path.equals("/api/trips/search") ||
                path.startsWith("/api/travelers/") ||
+               path.equals("/api/health") ||
                path.equals("/actuator/health") ||
                path.startsWith("/actuator/") ||
                path.equals("/h2-console") ||

@@ -12,7 +12,13 @@
       "Bash(find:*)",
       "Bash(npm run build:*)",
       "Bash(gcloud --version:*)",
-      "Bash(gcloud auth:*)"
+      "Bash(gcloud auth:*)",
+      "Bash(nslookup:*)",
+      "Bash(gcloud compute ssh:*)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
