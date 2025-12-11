@@ -1,5 +1,6 @@
 package com.habeshago.request;
 
+import com.habeshago.trip.ContactMethod;
 import com.habeshago.trip.Trip;
 import com.habeshago.user.User;
 import jakarta.persistence.*;
@@ -44,6 +45,13 @@ public class ItemRequest {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private RequestStatus status = RequestStatus.PENDING;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sender_contact_method", length = 20)
+    private ContactMethod senderContactMethod;
+
+    @Column(name = "sender_contact_value", length = 50)
+    private String senderContactValue;
 
     @Column(name = "paid", nullable = false)
     private Boolean paid = false;
@@ -94,6 +102,12 @@ public class ItemRequest {
 
     public Boolean getPaid() { return paid; }
     public void setPaid(Boolean paid) { this.paid = paid; }
+
+    public ContactMethod getSenderContactMethod() { return senderContactMethod; }
+    public void setSenderContactMethod(ContactMethod senderContactMethod) { this.senderContactMethod = senderContactMethod; }
+
+    public String getSenderContactValue() { return senderContactValue; }
+    public void setSenderContactValue(String senderContactValue) { this.senderContactValue = senderContactValue; }
 
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

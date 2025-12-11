@@ -1,8 +1,10 @@
 package com.habeshago.request.dto;
 
+import com.habeshago.trip.ContactMethod;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -20,10 +22,15 @@ public class ItemRequestCreateRequest {
     @Size(max = 500, message = "Special instructions must be at most 500 characters")
     private String specialInstructions;
 
+    @NotNull(message = "Contact method is required")
+    private ContactMethod contactMethod;
+
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
     public BigDecimal getWeightKg() { return weightKg; }
     public void setWeightKg(BigDecimal weightKg) { this.weightKg = weightKg; }
     public String getSpecialInstructions() { return specialInstructions; }
     public void setSpecialInstructions(String specialInstructions) { this.specialInstructions = specialInstructions; }
+    public ContactMethod getContactMethod() { return contactMethod; }
+    public void setContactMethod(ContactMethod contactMethod) { this.contactMethod = contactMethod; }
 }

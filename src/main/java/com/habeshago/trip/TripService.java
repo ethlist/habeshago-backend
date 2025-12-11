@@ -45,6 +45,9 @@ public class TripService {
 
     @Transactional
     public TripDto createTrip(User currentUser, TripCreateRequest req) {
+        // Validate user can transact (has at least one contact method)
+        validateCanTransact(currentUser);
+
         // Validate arrival date is on or after departure date
         if (req.getArrivalDate() != null && req.getDepartureDate() != null
                 && req.getArrivalDate().isBefore(req.getDepartureDate())) {
@@ -77,24 +80,51 @@ public class TripService {
     }
 
     /**
+     * Validates that a user can create trips.
+     *
+     * For Telegram users: Must have at least one contact method (username OR verified phone)
+     * For Email users: Must have verified phone
+     */
+    private void validateCanTransact(User user) {
+        if (user.getTelegramUserId() != null) {
+            // Telegram user: needs at least one contact method
+            boolean hasUsername = user.getUsername() != null && !user.getUsername().isBlank();
+            boolean hasVerifiedPhone = Boolean.TRUE.equals(user.getPhoneVerified());
+
+            if (!hasUsername && !hasVerifiedPhone) {
+                throw new BadRequestException(
+                    "Please add a phone number to continue. " +
+                    "Telegram users without a username must verify a phone number."
+                );
+            }
+        } else {
+            // Email user: must have verified phone
+            if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
+                throw new BadRequestException("Phone verification required to create trips");
+            }
+        }
+    }
+
+    /**
      * Validates the contact method choice and returns the contact value to store.
      * @throws BadRequestException if the contact method is not available for this user
      */
     private String resolveContactValue(User user, ContactMethod contactMethod) {
         if (contactMethod == ContactMethod.TELEGRAM) {
-            // User must have Telegram linked
-            if (user.getTelegramUserId() == null && user.getUsername() == null) {
-                throw new BadRequestException("Telegram is not linked to your account");
+            String username = user.getUsername();
+            if (username == null || username.isBlank()) {
+                throw new BadRequestException(
+                    "Cannot use Telegram as contact method - you don't have a Telegram username. " +
+                    "Please select Phone instead or set a username in Telegram."
+                );
             }
-            // Use username if available, otherwise use @telegramUserId
-            return user.getUsername() != null ? user.getUsername() : "@" + user.getTelegramUserId();
+            return username;
         } else if (contactMethod == ContactMethod.PHONE) {
-            // User must have verified phone
             if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
-                throw new BadRequestException("Phone number is not verified. Please verify your phone first.");
-            }
-            if (user.getPhoneNumber() == null || user.getPhoneNumber().isEmpty()) {
-                throw new BadRequestException("No phone number on file");
+                throw new BadRequestException(
+                    "Cannot use Phone as contact method - phone not verified. " +
+                    "Please verify your phone number first."
+                );
             }
             return user.getPhoneNumber();
         }

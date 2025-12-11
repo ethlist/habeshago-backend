@@ -9,6 +9,7 @@ import com.habeshago.notification.Notification;
 import com.habeshago.notification.NotificationOutbox;
 import com.habeshago.notification.NotificationRepository;
 import com.habeshago.notification.NotificationService;
+import com.habeshago.trip.ContactMethod;
 import com.habeshago.trip.Trip;
 import com.habeshago.trip.TripRepository;
 import com.habeshago.user.User;
@@ -46,10 +47,12 @@ public class ItemRequestService {
 
     @Transactional
     public ItemRequestDto createRequest(User sender, Long tripId, ItemRequestCreateRequest req) {
-        // Web users (no Telegram) must have verified phone to send requests
-        if (sender.getTelegramUserId() == null && !Boolean.TRUE.equals(sender.getPhoneVerified())) {
-            throw new BadRequestException("Phone verification required to send requests");
-        }
+        // Validate user can transact (has at least one contact method)
+        validateCanTransact(sender);
+
+        // Validate contact method availability
+        ContactMethod contactMethod = req.getContactMethod();
+        String contactValue = resolveContactValue(sender, contactMethod);
 
         Trip trip = tripRepository.findById(tripId)
                 .orElseThrow(() -> new NotFoundException("Trip not found"));
@@ -65,6 +68,8 @@ public class ItemRequestService {
         ir.setWeightKg(req.getWeightKg());
         ir.setSpecialInstructions(req.getSpecialInstructions());
         ir.setStatus(RequestStatus.PENDING);
+        ir.setSenderContactMethod(contactMethod);
+        ir.setSenderContactValue(contactValue);
 
         ItemRequest saved = itemRequestRepository.save(ir);
 
@@ -72,6 +77,57 @@ public class ItemRequestService {
         sendNewRequestNotification(saved);
 
         return ItemRequestDto.from(saved);
+    }
+
+    /**
+     * Validates that a user can create requests.
+     *
+     * For Telegram users: Must have at least one contact method (username OR verified phone)
+     * For Email users: Must have verified phone
+     */
+    private void validateCanTransact(User user) {
+        if (user.getTelegramUserId() != null) {
+            // Telegram user: needs at least one contact method
+            boolean hasUsername = user.getUsername() != null && !user.getUsername().isBlank();
+            boolean hasVerifiedPhone = Boolean.TRUE.equals(user.getPhoneVerified());
+
+            if (!hasUsername && !hasVerifiedPhone) {
+                throw new BadRequestException(
+                    "Please add a phone number to continue. " +
+                    "Telegram users without a username must verify a phone number."
+                );
+            }
+        } else {
+            // Email user: must have verified phone
+            if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
+                throw new BadRequestException("Phone verification required to send requests");
+            }
+        }
+    }
+
+    /**
+     * Resolves the actual contact value based on the chosen contact method.
+     */
+    private String resolveContactValue(User user, ContactMethod contactMethod) {
+        if (contactMethod == ContactMethod.TELEGRAM) {
+            String username = user.getUsername();
+            if (username == null || username.isBlank()) {
+                throw new BadRequestException(
+                    "Cannot use Telegram as contact method - you don't have a Telegram username. " +
+                    "Please select Phone instead or set a username in Telegram."
+                );
+            }
+            return username;
+        } else if (contactMethod == ContactMethod.PHONE) {
+            if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
+                throw new BadRequestException(
+                    "Cannot use Phone as contact method - phone not verified. " +
+                    "Please verify your phone number first."
+                );
+            }
+            return user.getPhoneNumber();
+        }
+        throw new BadRequestException("Invalid contact method");
     }
 
     @Transactional(readOnly = true)

@@ -18,6 +18,8 @@ public record ItemRequestDto(
         String deliveryPhotoUrl,
         String status,
         Boolean paid,
+        String senderContactMethod,
+        String senderContactValue,
         Instant createdAt,
         Instant updatedAt,
         // Embedded objects
@@ -40,6 +42,8 @@ public record ItemRequestDto(
                 ir.getDeliveryPhotoUrl(),
                 ir.getStatus().name(),
                 ir.getPaid(),
+                ir.getSenderContactMethod() != null ? ir.getSenderContactMethod().name() : null,
+                ir.getSenderContactValue(),
                 ir.getCreatedAt(),
                 ir.getUpdatedAt(),
                 includeTrip && ir.getTrip() != null ? TripDto.from(ir.getTrip()) : null,

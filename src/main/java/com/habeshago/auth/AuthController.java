@@ -2,6 +2,7 @@ package com.habeshago.auth;
 
 import com.habeshago.auth.dto.AuthResponse;
 import com.habeshago.auth.dto.TelegramAuthRequest;
+import com.habeshago.auth.dto.TelegramWebAuthRequest;
 import com.habeshago.auth.dto.WebLoginRequest;
 import com.habeshago.auth.dto.WebRegisterRequest;
 import com.habeshago.common.SecurityAuditLogger;
@@ -59,6 +60,53 @@ public class AuthController {
         String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
 
         return ResponseEntity.ok(new AuthResponse(token, UserDto.from(user)));
+    }
+
+    /**
+     * Authenticate using Telegram Login Widget (for web users).
+     * This is different from the Mini App authentication - the widget sends
+     * individual fields and uses a different hash algorithm.
+     */
+    @PostMapping("/telegram-web")
+    public ResponseEntity<AuthResponse> authenticateWithTelegramWeb(
+            @Valid @RequestBody TelegramWebAuthRequest request,
+            HttpServletRequest httpRequest) {
+
+        String ipAddress = getClientIpAddress(httpRequest);
+
+        // Use login rate limiting
+        if (!rateLimitService.isLoginAllowed(ipAddress)) {
+            int retryAfter = rateLimitService.getLockoutRemainingSeconds(ipAddress);
+            securityAuditLogger.logRateLimitExceeded(ipAddress, "/api/auth/telegram-web", retryAfter);
+            throw new RateLimitService.RateLimitExceededException(
+                    "Too many login attempts. Please try again later.", retryAfter);
+        }
+
+        try {
+            // Validate Telegram Login Widget data
+            TelegramAuthService.TelegramUserData telegramUser =
+                    telegramAuthService.validateAndParseWebLogin(request);
+
+            // Find or create user
+            User user = userRepository.findByTelegramUserId(telegramUser.telegramUserId())
+                    .orElseGet(() -> createNewUser(telegramUser));
+
+            // Update user info if changed
+            updateUserInfo(user, telegramUser);
+
+            // Generate JWT token
+            String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
+
+            // Clear rate limit attempts on success
+            rateLimitService.clearLoginAttempts(ipAddress);
+            securityAuditLogger.logLoginSuccess(ipAddress, String.valueOf(user.getId()), "telegram:" + telegramUser.telegramUserId());
+
+            return ResponseEntity.ok(new AuthResponse(token, UserDto.from(user)));
+        } catch (SecurityException e) {
+            rateLimitService.recordLoginAttempt(ipAddress);
+            securityAuditLogger.logLoginFailure(ipAddress, "telegram:" + request.id(), e.getMessage());
+            throw new InvalidTelegramAuthException(e.getMessage());
+        }
     }
 
     private User createNewUser(TelegramAuthService.TelegramUserData telegramUser) {
@@ -212,6 +260,18 @@ public class AuthController {
                 .body(new RateLimitErrorResponse(429, ex.getMessage(), ex.getRetryAfterSeconds()));
     }
 
+    @ExceptionHandler(InvalidTelegramAuthException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidTelegramAuth(InvalidTelegramAuthException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new ErrorResponse(401, ex.getMessage()));
+    }
+
     public record ErrorResponse(int code, String message) {}
     public record RateLimitErrorResponse(int code, String message, int retryAfterSeconds) {}
+
+    public static class InvalidTelegramAuthException extends RuntimeException {
+        public InvalidTelegramAuthException(String message) {
+            super(message);
+        }
+    }
 }

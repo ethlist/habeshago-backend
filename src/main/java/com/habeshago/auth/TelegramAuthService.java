@@ -2,6 +2,7 @@ package com.habeshago.auth;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.habeshago.auth.dto.TelegramWebAuthRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,14 +17,18 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Service for validating Telegram Mini App initData.
- * See: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+ * Service for validating Telegram authentication.
+ * Supports both Mini App initData and Login Widget authentication.
+ *
+ * Mini App: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+ * Login Widget: https://core.telegram.org/widgets/login
  */
 @Service
 public class TelegramAuthService {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramAuthService.class);
     private static final String HMAC_SHA256 = "HmacSHA256";
+    private static final long MAX_AUTH_AGE_SECONDS = 86400; // 24 hours
 
     private final String botToken;
     private final ObjectMapper objectMapper;
@@ -146,6 +151,106 @@ public class TelegramAuthService {
             result.append(String.format("%02x", b));
         }
         return result.toString();
+    }
+
+    // ========== Telegram Login Widget Methods ==========
+
+    /**
+     * Validates and parses Telegram Login Widget authentication data.
+     * The Login Widget uses a different hash algorithm than the Mini App.
+     *
+     * Algorithm:
+     * 1. Build data-check-string (sorted key=value pairs, newline separated)
+     * 2. secret_key = SHA256(bot_token)
+     * 3. hash = HMAC-SHA256(data-check-string, secret_key)
+     *
+     * @param request The request containing Telegram Login Widget data
+     * @return TelegramUserData if valid
+     * @throws IllegalArgumentException if data is invalid
+     * @throws SecurityException if signature verification fails
+     */
+    public TelegramUserData validateAndParseWebLogin(TelegramWebAuthRequest request) {
+        if (request == null || request.id() == null) {
+            throw new IllegalArgumentException("Telegram user ID is required");
+        }
+
+        // In dev mode, skip signature validation
+        if (!devMode) {
+            // Check if auth_date is recent (within 24 hours)
+            long currentTime = System.currentTimeMillis() / 1000;
+            if (currentTime - request.authDate() > MAX_AUTH_AGE_SECONDS) {
+                throw new SecurityException("Telegram authentication data has expired");
+            }
+
+            // Verify the signature
+            if (!verifyWidgetSignature(request)) {
+                throw new SecurityException("Invalid Telegram Login Widget signature");
+            }
+        }
+
+        return new TelegramUserData(
+                request.id(),
+                request.firstName(),
+                request.lastName(),
+                request.username(),
+                "en" // Login widget doesn't provide language code
+        );
+    }
+
+    /**
+     * Verifies the Telegram Login Widget signature.
+     *
+     * The algorithm is different from Mini App:
+     * - Mini App: secret_key = HMAC_SHA256(bot_token, "WebAppData")
+     * - Widget: secret_key = SHA256(bot_token)
+     */
+    private boolean verifyWidgetSignature(TelegramWebAuthRequest request) {
+        try {
+            // Build the data-check-string (sorted alphabetically, excluding hash)
+            TreeMap<String, String> params = new TreeMap<>();
+            params.put("id", String.valueOf(request.id()));
+            params.put("auth_date", String.valueOf(request.authDate()));
+
+            if (request.firstName() != null) {
+                params.put("first_name", request.firstName());
+            }
+            if (request.lastName() != null) {
+                params.put("last_name", request.lastName());
+            }
+            if (request.username() != null) {
+                params.put("username", request.username());
+            }
+            if (request.photoUrl() != null) {
+                params.put("photo_url", request.photoUrl());
+            }
+
+            StringBuilder dataCheckString = new StringBuilder();
+            params.forEach((key, value) -> {
+                if (dataCheckString.length() > 0) {
+                    dataCheckString.append("\n");
+                }
+                dataCheckString.append(key).append("=").append(value);
+            });
+
+            // secret_key = SHA256(bot_token)
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            byte[] secretKey = sha256.digest(botToken.getBytes(StandardCharsets.UTF_8));
+
+            // hash = HMAC_SHA256(data_check_string, secret_key)
+            Mac hmac = Mac.getInstance(HMAC_SHA256);
+            hmac.init(new SecretKeySpec(secretKey, HMAC_SHA256));
+            byte[] calculatedHash = hmac.doFinal(dataCheckString.toString().getBytes(StandardCharsets.UTF_8));
+
+            // Compare hashes
+            String calculatedHashHex = bytesToHex(calculatedHash);
+            return MessageDigest.isEqual(
+                    calculatedHashHex.getBytes(StandardCharsets.UTF_8),
+                    request.hash().getBytes(StandardCharsets.UTF_8)
+            );
+        } catch (Exception e) {
+            log.error("Failed to verify Telegram Login Widget signature", e);
+            return false;
+        }
     }
 
     public record TelegramUserData(
