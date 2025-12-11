@@ -88,4 +88,37 @@ public record TripDto(
                 canEdit
         );
     }
+
+    /**
+     * Creates a new TripDto with contact information masked.
+     * Used for unauthenticated users viewing trip details.
+     */
+    public TripDto withMaskedContact() {
+        return new TripDto(
+                id,
+                userId,
+                fromCity,
+                fromCountry,
+                fromAirportCode,
+                toCity,
+                toCountry,
+                toAirportCode,
+                departureDate,
+                arrivalDate,
+                capacityType,
+                maxWeightKg,
+                notes,
+                status,
+                cancellationReason,
+                null,  // mask contactMethod
+                null,  // mask contactValue
+                createdAt,
+                updatedAt,
+                traveler,
+                requestCount,
+                pendingRequestCount,
+                acceptedRequestCount,
+                canEdit
+        );
+    }
 }

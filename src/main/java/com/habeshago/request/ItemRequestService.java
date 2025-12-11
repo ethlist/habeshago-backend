@@ -46,6 +46,11 @@ public class ItemRequestService {
 
     @Transactional
     public ItemRequestDto createRequest(User sender, Long tripId, ItemRequestCreateRequest req) {
+        // Web users (no Telegram) must have verified phone to send requests
+        if (sender.getTelegramUserId() == null && !Boolean.TRUE.equals(sender.getPhoneVerified())) {
+            throw new BadRequestException("Phone verification required to send requests");
+        }
+
         Trip trip = tripRepository.findById(tripId)
                 .orElseThrow(() -> new NotFoundException("Trip not found"));
 

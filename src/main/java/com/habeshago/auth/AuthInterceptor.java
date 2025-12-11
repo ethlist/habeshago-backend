@@ -54,6 +54,9 @@ public class AuthInterceptor implements HandlerInterceptor {
             return true;
         }
 
+        // Check if this is an optional-auth endpoint
+        boolean optionalAuth = isOptionalAuthEndpoint(path, request.getMethod());
+
         // Try JWT auth first (Authorization: Bearer <token>)
         String authHeader = request.getHeader("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
@@ -92,6 +95,13 @@ public class AuthInterceptor implements HandlerInterceptor {
             }
         }
 
+        // For optional-auth endpoints, allow through without authentication
+        // The controller will check if user is null and handle accordingly
+        if (optionalAuth) {
+            log.debug("Optional auth endpoint accessed without authentication: {}", path);
+            return true;
+        }
+
         // SECURITY: No valid authentication - reject request
         log.debug("Authentication required for path: {}", path);
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
@@ -109,6 +119,18 @@ public class AuthInterceptor implements HandlerInterceptor {
                path.startsWith("/actuator/") ||
                path.equals("/h2-console") ||
                path.startsWith("/h2-console/");
+    }
+
+    /**
+     * Endpoints where authentication is optional - we try to authenticate but don't require it.
+     * The controller can check if user is null to determine access level.
+     */
+    private boolean isOptionalAuthEndpoint(String path, String method) {
+        // GET /api/trips/{id} - trip details, optionally authenticated
+        if ("GET".equalsIgnoreCase(method) && path.matches("/api/trips/\\d+")) {
+            return true;
+        }
+        return false;
     }
 
     public static User getCurrentUser(HttpServletRequest request) {

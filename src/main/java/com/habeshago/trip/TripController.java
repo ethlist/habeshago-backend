@@ -103,9 +103,16 @@ public class TripController {
 
     @GetMapping("/trips/{id}")
     public ResponseEntity<TripDto> getTrip(HttpServletRequest request, @PathVariable Long id) {
-        // Require authentication to protect traveler data from scrapers
-        requireCurrentUser(request);
-        return ResponseEntity.ok(tripService.getTrip(id));
+        // Optional auth - unauthenticated users can view but with masked contact info
+        User currentUser = AuthInterceptor.getCurrentUser(request);
+        TripDto trip = tripService.getTrip(id);
+
+        // Mask contact info for unauthenticated users
+        if (currentUser == null) {
+            trip = trip.withMaskedContact();
+        }
+
+        return ResponseEntity.ok(trip);
     }
 
     @GetMapping("/trips/search")
