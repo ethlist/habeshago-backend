@@ -1,5 +1,7 @@
 package com.habeshago.user;
 
+import com.habeshago.verification.IDType;
+import com.habeshago.verification.VerificationStatus;
 import jakarta.persistence.*;
 import java.time.Instant;
 
@@ -37,12 +39,49 @@ public class User {
     @Column(name = "preferred_language", nullable = false, length = 5)
     private String preferredLanguage = "en";
 
-    // Verification fields
+    // Profile edit tracking - prevents Telegram from overwriting user-edited profile
+    @Column(name = "profile_edited_by_user", nullable = false)
+    private Boolean profileEditedByUser = false;
+
+    // Legacy verification fields (kept for backwards compatibility)
     @Column(name = "verified", nullable = false)
     private Boolean verified = false;
 
     @Column(name = "verified_at")
     private Instant verifiedAt;
+
+    // Enhanced verification fields
+    @Enumerated(EnumType.STRING)
+    @Column(name = "verification_status", length = 30)
+    private VerificationStatus verificationStatus = VerificationStatus.NONE;
+
+    @Column(name = "phone_number", length = 20)
+    private String phoneNumber;
+
+    @Column(name = "phone_verified", nullable = false)
+    private Boolean phoneVerified = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "id_type", length = 20)
+    private IDType idType;
+
+    @Column(name = "id_photo_url", length = 500)
+    private String idPhotoUrl;
+
+    @Column(name = "selfie_url", length = 500)
+    private String selfieUrl;
+
+    @Column(name = "verification_rejection_reason", length = 500)
+    private String verificationRejectionReason;
+
+    @Column(name = "verification_attempts", nullable = false)
+    private Integer verificationAttempts = 0;
+
+    @Column(name = "verification_submitted_at")
+    private Instant verificationSubmittedAt;
+
+    @Column(name = "verification_reviewed_at")
+    private Instant verificationReviewedAt;
 
     // Reputation fields (denormalized for fast reads)
     @Column(name = "rating_average")
@@ -56,6 +95,10 @@ public class User {
 
     @Column(name = "completed_deliveries_count", nullable = false)
     private Integer completedDeliveriesCount = 0;
+
+    // Track accepted requests to calculate completion rate
+    @Column(name = "accepted_requests_count", nullable = false)
+    private Integer acceptedRequestsCount = 0;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -98,11 +141,44 @@ public class User {
     public String getPreferredLanguage() { return preferredLanguage; }
     public void setPreferredLanguage(String preferredLanguage) { this.preferredLanguage = preferredLanguage; }
 
+    public Boolean getProfileEditedByUser() { return profileEditedByUser; }
+    public void setProfileEditedByUser(Boolean profileEditedByUser) { this.profileEditedByUser = profileEditedByUser; }
+
     public Boolean getVerified() { return verified; }
     public void setVerified(Boolean verified) { this.verified = verified; }
 
     public Instant getVerifiedAt() { return verifiedAt; }
     public void setVerifiedAt(Instant verifiedAt) { this.verifiedAt = verifiedAt; }
+
+    public VerificationStatus getVerificationStatus() { return verificationStatus; }
+    public void setVerificationStatus(VerificationStatus verificationStatus) { this.verificationStatus = verificationStatus; }
+
+    public String getPhoneNumber() { return phoneNumber; }
+    public void setPhoneNumber(String phoneNumber) { this.phoneNumber = phoneNumber; }
+
+    public Boolean getPhoneVerified() { return phoneVerified; }
+    public void setPhoneVerified(Boolean phoneVerified) { this.phoneVerified = phoneVerified; }
+
+    public IDType getIdType() { return idType; }
+    public void setIdType(IDType idType) { this.idType = idType; }
+
+    public String getIdPhotoUrl() { return idPhotoUrl; }
+    public void setIdPhotoUrl(String idPhotoUrl) { this.idPhotoUrl = idPhotoUrl; }
+
+    public String getSelfieUrl() { return selfieUrl; }
+    public void setSelfieUrl(String selfieUrl) { this.selfieUrl = selfieUrl; }
+
+    public String getVerificationRejectionReason() { return verificationRejectionReason; }
+    public void setVerificationRejectionReason(String verificationRejectionReason) { this.verificationRejectionReason = verificationRejectionReason; }
+
+    public Integer getVerificationAttempts() { return verificationAttempts; }
+    public void setVerificationAttempts(Integer verificationAttempts) { this.verificationAttempts = verificationAttempts; }
+
+    public Instant getVerificationSubmittedAt() { return verificationSubmittedAt; }
+    public void setVerificationSubmittedAt(Instant verificationSubmittedAt) { this.verificationSubmittedAt = verificationSubmittedAt; }
+
+    public Instant getVerificationReviewedAt() { return verificationReviewedAt; }
+    public void setVerificationReviewedAt(Instant verificationReviewedAt) { this.verificationReviewedAt = verificationReviewedAt; }
 
     public Double getRatingAverage() { return ratingAverage; }
     public void setRatingAverage(Double ratingAverage) { this.ratingAverage = ratingAverage; }
@@ -115,6 +191,21 @@ public class User {
 
     public Integer getCompletedDeliveriesCount() { return completedDeliveriesCount; }
     public void setCompletedDeliveriesCount(Integer completedDeliveriesCount) { this.completedDeliveriesCount = completedDeliveriesCount; }
+
+    public Integer getAcceptedRequestsCount() { return acceptedRequestsCount; }
+    public void setAcceptedRequestsCount(Integer acceptedRequestsCount) { this.acceptedRequestsCount = acceptedRequestsCount; }
+
+    /**
+     * Calculate completion rate as percentage.
+     * Returns null if no accepted requests yet (shows as "New traveler").
+     */
+    public Integer getCompletionRate() {
+        if (acceptedRequestsCount == null || acceptedRequestsCount == 0) {
+            return null; // No data yet
+        }
+        int delivered = completedDeliveriesCount != null ? completedDeliveriesCount : 0;
+        return (int) Math.round((delivered * 100.0) / acceptedRequestsCount);
+    }
 
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

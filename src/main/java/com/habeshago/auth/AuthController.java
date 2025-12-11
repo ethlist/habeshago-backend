@@ -74,18 +74,22 @@ public class AuthController {
     private void updateUserInfo(User user, TelegramAuthService.TelegramUserData telegramUser) {
         boolean changed = false;
 
-        if (telegramUser.firstName() != null &&
-                !telegramUser.firstName().equals(user.getFirstName())) {
-            user.setFirstName(telegramUser.firstName());
-            changed = true;
+        // Only update firstName and lastName from Telegram if user hasn't manually edited their profile
+        if (!Boolean.TRUE.equals(user.getProfileEditedByUser())) {
+            if (telegramUser.firstName() != null &&
+                    !telegramUser.firstName().equals(user.getFirstName())) {
+                user.setFirstName(telegramUser.firstName());
+                changed = true;
+            }
+
+            if (telegramUser.lastName() != null &&
+                    !telegramUser.lastName().equals(user.getLastName())) {
+                user.setLastName(telegramUser.lastName());
+                changed = true;
+            }
         }
 
-        if (telegramUser.lastName() != null &&
-                !telegramUser.lastName().equals(user.getLastName())) {
-            user.setLastName(telegramUser.lastName());
-            changed = true;
-        }
-
+        // Username is always synced from Telegram (not editable by user in the app)
         if (telegramUser.username() != null &&
                 !telegramUser.username().equals(user.getUsername())) {
             user.setUsername(telegramUser.username());

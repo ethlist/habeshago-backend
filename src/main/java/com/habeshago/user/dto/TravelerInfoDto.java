@@ -10,7 +10,9 @@ public record TravelerInfoDto(
         Boolean verified,
         Double ratingAverage,
         Integer ratingCount,
-        Integer completedTripsCount
+        Integer completedTripsCount,
+        Integer completedDeliveriesCount,
+        Integer completionRate // Percentage (0-100), null if no data
 ) {
     public static TravelerInfoDto from(User user) {
         return new TravelerInfoDto(
@@ -21,7 +23,9 @@ public record TravelerInfoDto(
                 user.getVerified(),
                 user.getRatingAverage(),
                 user.getRatingCount(),
-                user.getCompletedTripsCount()
+                user.getCompletedTripsCount(),
+                user.getCompletedDeliveriesCount(),
+                user.getCompletionRate()
         );
     }
 }

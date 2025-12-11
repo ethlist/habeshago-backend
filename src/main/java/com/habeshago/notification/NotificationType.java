@@ -7,6 +7,7 @@ public enum NotificationType {
     REQUEST_REJECTED,
     REQUEST_DELIVERED,
     REQUEST_CANCELLED,
+    TRIP_CANCELLED,
     TRIP_REMINDER,
     REVIEW_PROMPT
 }

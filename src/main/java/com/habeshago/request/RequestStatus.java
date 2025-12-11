@@ -5,5 +5,6 @@ public enum RequestStatus {
     ACCEPTED,
     REJECTED,
     CANCELLED,
+    CANCELLED_BY_TRAVELER,
     DELIVERED
 }

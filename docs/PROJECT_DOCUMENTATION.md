@@ -10,9 +10,10 @@
 7. [Notification System](#notification-system)
 8. [Logging & Monitoring](#logging--monitoring)
 9. [Payment Integration](#payment-integration)
-10. [Configuration](#configuration)
-11. [Project Structure](#project-structure)
-12. [Docker Deployment](#docker-deployment)
+10. [Enhanced Verification Flow](#enhanced-verification-flow)
+11. [Configuration](#configuration)
+12. [Project Structure](#project-structure)
+13. [Docker Deployment](#docker-deployment)
 
 ---
 
@@ -31,7 +32,10 @@ HabeshaGo is a platform connecting Ethiopian travelers with people who need to s
 - Dual authentication (Telegram Mini App + Web/Email)
 - Multi-language support (English + Amharic)
 - Telegram bot integration for real-time notifications
-- Stripe payment integration for user verification
+- Enhanced verification flow (Phone OTP + ID + Admin review + Payment)
+- Trip management (edit/cancel with notifications)
+- Profile sync protection (user edits preserved from Telegram overwrites)
+- Stripe/Telegram Stars payment integration
 - Rate limiting for security
 - Comprehensive logging for production
 
@@ -60,6 +64,7 @@ HabeshaGo is a platform connecting Ethiopian travelers with people who need to s
 - **jjwt** (v0.12.6) - JWT token handling
 - **spring-security-crypto** - BCrypt password hashing
 - **stripe-java** (v26.1.0) - Stripe payment SDK
+- **google-cloud-storage** (v2.30.1) - GCS file storage for ID uploads
 - **logstash-logback-encoder** (v7.4) - JSON logging
 
 ---
@@ -204,8 +209,22 @@ HabeshaGo is a platform connecting Ethiopian travelers with people who need to s
 - `ACCEPTED` - Traveler accepted
 - `REJECTED` - Traveler rejected
 - `CANCELLED` - Sender cancelled
+- `CANCELLED_BY_TRAVELER` - Auto-cancelled when trip is cancelled
 - `PICKED_UP` - Item collected
 - `DELIVERED` - Delivery confirmed
+
+**VerificationStatus:**
+- `NONE` - Not started
+- `PENDING_PHONE` - Awaiting phone verification
+- `PENDING_ID` - Awaiting ID document review
+- `PENDING_PAYMENT` - ID approved, awaiting payment
+- `APPROVED` - Fully verified
+- `REJECTED` - ID verification rejected
+
+**IDType:**
+- `PASSPORT` - Passport document
+- `NATIONAL_ID` - National ID card
+- `DRIVERS_LICENSE` - Driver's license
 
 **CapacityType:**
 - `FULL_SUITCASE` - Entire suitcase available
@@ -279,7 +298,8 @@ Response: Same as login
 | GET | `/trips/my` | Get my trips | Yes |
 | GET | `/trips/{id}` | Get trip by ID | Yes |
 | GET | `/trips/search` | Search trips | Yes |
-| POST | `/trips/{id}/cancel` | Cancel trip | Yes |
+| PUT | `/trips/{id}` | Edit trip (only if no accepted requests) | Yes |
+| POST | `/trips/{id}/cancel` | Cancel trip (with notifications) | Yes |
 | POST | `/trips/{id}/complete` | Mark trip complete | Yes |
 
 **POST /api/trips**
@@ -378,10 +398,65 @@ Response:
 
 | Method | Endpoint | Description | Auth |
 |--------|----------|-------------|------|
+| POST | `/phone/send` | Send OTP to phone number | Yes |
+| POST | `/phone/verify` | Verify OTP code | Yes |
+| POST | `/id/submit` | Submit ID documents (multipart) | Yes |
+| GET | `/status` | Get verification status | Yes |
+| GET | `/rejection-reasons` | Get predefined rejection reasons | Yes |
 | POST | `/payment` | Initiate Telegram payment | Yes |
 | POST | `/confirm` | Confirm Telegram payment | Yes |
 | POST | `/stripe/checkout` | Create Stripe checkout session | Yes |
 | POST | `/stripe/confirm` | Confirm Stripe payment | Yes |
+
+**POST /api/verification/phone/send**
+```json
+Request:
+{
+  "phoneNumber": "+1234567890"
+}
+
+Response:
+{
+  "success": true,
+  "message": "Verification code sent",
+  "cooldownSeconds": null,
+  "devOtp": "123456"  // Only in dev mode
+}
+```
+
+**POST /api/verification/phone/verify**
+```json
+Request:
+{
+  "phoneNumber": "+1234567890",
+  "otp": "123456"
+}
+
+Response:
+{
+  "success": true,
+  "message": "Phone number verified"
+}
+```
+
+**POST /api/verification/id/submit** (multipart/form-data)
+```
+idType: PASSPORT | NATIONAL_ID | DRIVERS_LICENSE
+idPhoto: [file]
+selfie: [file]
+```
+
+**GET /api/verification/status**
+```json
+Response:
+{
+  "status": "PENDING_ID",
+  "phoneVerified": true,
+  "idVerified": false,
+  "rejectionReason": null,
+  "verificationAttempts": 1
+}
+```
 
 **POST /api/verification/stripe/checkout**
 ```json
@@ -484,6 +559,7 @@ The notification system uses the transactional outbox pattern for reliable deliv
 | `NEW_REQUEST` | Request created | Traveler |
 | `REQUEST_ACCEPTED` | Traveler accepts | Sender |
 | `REQUEST_REJECTED` | Traveler rejects | Sender |
+| `TRIP_CANCELLED` | Trip cancelled by traveler | All affected senders |
 | `ITEM_DELIVERED` | Delivery confirmed | Sender |
 | `NEW_REVIEW` | Review submitted | Traveler |
 
@@ -567,6 +643,55 @@ For Telegram Mini App users, native Telegram Stars payment can be used.
 
 ---
 
+## Enhanced Verification Flow
+
+The verification system uses a multi-step process to verify user identity.
+
+### Verification Steps
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Phone OTP      │───▶│  ID Document    │───▶│  Admin Review   │───▶│  Payment        │
+│  (Twilio SMS)   │    │  Upload (GCS)   │    │  (Telegram)     │    │  (Stripe/Stars) │
+└─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
+     NONE →             PENDING_PHONE →        PENDING_ID →           PENDING_PAYMENT →
+     PENDING_PHONE      PENDING_ID             PENDING_PAYMENT        APPROVED
+```
+
+### Step 1: Phone Verification
+- User submits phone number
+- OTP sent via Twilio SMS (or logged in dev mode)
+- 60-second cooldown between OTP requests
+- OTP valid for 5 minutes
+
+### Step 2: ID Document Upload
+- User uploads ID photo and selfie
+- Files stored in GCS (or local in dev mode)
+- Supports PASSPORT, NATIONAL_ID, DRIVERS_LICENSE
+- Max 5MB per file, JPG/PNG/HEIC formats
+- Max 3 verification attempts
+
+### Step 3: Admin Review
+- Admin notified via Telegram with user details and document URLs
+- Admin can approve or reject with predefined reasons:
+  - "ID photo is blurry or unreadable"
+  - "Selfie doesn't clearly show your face"
+  - "Face in selfie doesn't match ID photo"
+  - "ID appears to be expired"
+  - "Name on ID doesn't match account name"
+
+### Step 4: Payment
+- After admin approval, user can pay verification fee
+- Supports Stripe (web) or Telegram Stars (mini app)
+- Once paid, user is fully verified
+
+### Profile Sync Protection
+
+When users edit their profile (firstName, lastName), a `profileEditedByUser` flag is set.
+Subsequent Telegram logins will not overwrite user-edited fields, preserving their changes.
+
+---
+
 ## Configuration
 
 ### Environment Variables
@@ -581,6 +706,12 @@ For Telegram Mini App users, native Telegram Stars payment can be used.
 | `JWT_SECRET` | Secret for JWT signing (64+ chars) | Yes | - |
 | `STRIPE_SECRET_KEY` | Stripe API secret key | No | - |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook secret | No | - |
+| `TWILIO_ACCOUNT_SID` | Twilio account SID for SMS | No | - |
+| `TWILIO_AUTH_TOKEN` | Twilio auth token | No | - |
+| `TWILIO_FROM_NUMBER` | Twilio phone number | No | - |
+| `GCS_BUCKET_NAME` | GCS bucket for ID uploads | No | - |
+| `GCS_PROJECT_ID` | GCS project ID | No | - |
+| `ADMIN_TELEGRAM_ID` | Admin Telegram ID for notifications | No | - |
 | `HABESHAGO_CORS_ALLOWED_ORIGINS` | CORS allowed origins | No | * |
 
 ### Application Profiles
@@ -674,9 +805,17 @@ habeshago/
 │       │   │
 │       │   ├── verification/                 # Verification/payment module
 │       │   │   ├── VerificationController.java
-│       │   │   ├── VerificationService.java  # Telegram payment
+│       │   │   ├── VerificationService.java  # Full verification flow
+│       │   │   ├── VerificationStatus.java   # Verification status enum
+│       │   │   ├── IDType.java               # ID type enum
+│       │   │   ├── SmsService.java           # Twilio SMS OTP
+│       │   │   ├── StorageService.java       # GCS file storage
 │       │   │   ├── StripeService.java        # Stripe integration
 │       │   │   └── dto/
+│       │   │       ├── PhoneSendOtpRequest.java
+│       │   │       ├── PhoneVerifyOtpRequest.java
+│       │   │       ├── OtpResponse.java
+│       │   │       ├── VerificationStatusResponse.java
 │       │   │       ├── InitiatePaymentResponse.java
 │       │   │       ├── ConfirmPaymentRequest.java
 │       │   │       ├── StripeCheckoutResponse.java

@@ -18,6 +18,8 @@ public record TravelerProfileDto(
         Integer ratingCount,
         Integer completedTripsCount,
         Integer completedDeliveriesCount,
+        Integer completionRate, // Percentage (0-100), null if no data
+        Instant memberSince,
         List<ReviewDto> recentReviews
 ) {
     public static TravelerProfileDto from(User user, List<Review> recentReviews) {
@@ -32,6 +34,8 @@ public record TravelerProfileDto(
                 user.getRatingCount(),
                 user.getCompletedTripsCount(),
                 user.getCompletedDeliveriesCount(),
+                user.getCompletionRate(),
+                user.getCreatedAt(),
                 recentReviews.stream().map(ReviewDto::from).toList()
         );
     }

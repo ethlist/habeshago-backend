@@ -1,8 +1,10 @@
 package com.habeshago.trip;
 
 import com.habeshago.auth.AuthInterceptor;
+import com.habeshago.trip.dto.TripCancelRequest;
 import com.habeshago.trip.dto.TripCreateRequest;
 import com.habeshago.trip.dto.TripDto;
+import com.habeshago.trip.dto.TripUpdateRequest;
 import com.habeshago.user.User;
 import com.habeshago.user.UserDto;
 import com.habeshago.user.LanguageUpdateRequest;
@@ -61,18 +63,24 @@ public class TripController {
             HttpServletRequest request,
             @RequestBody ProfileUpdateRequest body) {
         User user = requireCurrentUser(request);
-        
+
+        boolean profileChanged = false;
+
         // Only update fields that are provided (not null)
         if (body.getFirstName() != null) {
             user.setFirstName(body.getFirstName());
+            profileChanged = true;
         }
         if (body.getLastName() != null) {
             user.setLastName(body.getLastName());
+            profileChanged = true;
         }
-        if (body.getUsername() != null) {
-            user.setUsername(body.getUsername());
+
+        // Mark profile as edited by user to prevent Telegram from overwriting
+        if (profileChanged) {
+            user.setProfileEditedByUser(true);
         }
-        
+
         User saved = userRepository.save(user);
         return ResponseEntity.ok(UserDto.from(saved));
     }
@@ -109,12 +117,23 @@ public class TripController {
         return ResponseEntity.ok(tripService.searchTrips(from, to, date, capacityType));
     }
 
+    @PutMapping("/trips/{id}")
+    public ResponseEntity<TripDto> updateTrip(
+            HttpServletRequest request,
+            @PathVariable Long id,
+            @Valid @RequestBody TripUpdateRequest body) {
+        User user = requireCurrentUser(request);
+        return ResponseEntity.ok(tripService.updateTrip(id, user.getId(), body));
+    }
+
     @PostMapping("/trips/{id}/cancel")
     public ResponseEntity<TripDto> cancelTrip(
             HttpServletRequest request,
-            @PathVariable Long id) {
+            @PathVariable Long id,
+            @RequestBody(required = false) TripCancelRequest body) {
         User user = requireCurrentUser(request);
-        return ResponseEntity.ok(tripService.cancelTrip(id, user.getId()));
+        String reason = body != null ? body.getReason() : null;
+        return ResponseEntity.ok(tripService.cancelTrip(id, user.getId(), reason));
     }
 
     @PostMapping("/trips/{id}/complete")

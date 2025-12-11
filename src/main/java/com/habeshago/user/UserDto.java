@@ -14,7 +14,15 @@ public record UserDto(
         Double ratingAverage,
         Integer ratingCount,
         Integer completedTripsCount,
-        Integer completedDeliveriesCount
+        Integer completedDeliveriesCount,
+        Integer acceptedRequestsCount,
+        Integer completionRate, // Percentage (0-100), null if no data
+        // Enhanced verification fields
+        String verificationStatus,
+        Boolean phoneVerified,
+        String idType,
+        String verificationRejectionReason,
+        Integer verificationAttempts
 ) {
     public static UserDto from(User user) {
         return new UserDto(
@@ -29,7 +37,14 @@ public record UserDto(
                 user.getRatingAverage(),
                 user.getRatingCount(),
                 user.getCompletedTripsCount(),
-                user.getCompletedDeliveriesCount()
+                user.getCompletedDeliveriesCount(),
+                user.getAcceptedRequestsCount(),
+                user.getCompletionRate(),
+                user.getVerificationStatus() != null ? user.getVerificationStatus().name() : "NONE",
+                user.getPhoneVerified(),
+                user.getIdType() != null ? user.getIdType().name() : null,
+                user.getVerificationRejectionReason(),
+                user.getVerificationAttempts()
         );
     }
 }

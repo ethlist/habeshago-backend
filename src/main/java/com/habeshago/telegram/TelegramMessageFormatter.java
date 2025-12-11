@@ -27,6 +27,7 @@ public class TelegramMessageFormatter {
             case "REQUEST_DELIVERED" -> formatRequestDelivered(payload);
             case "REQUEST_REJECTED" -> formatRequestRejected(payload);
             case "NEW_REQUEST" -> formatNewRequest(payload);
+            case "TRIP_CANCELLED" -> formatTripCancelled(payload);
             default -> formatGeneric(payload);
         };
     }
@@ -163,6 +164,28 @@ public class TelegramMessageFormatter {
         text.append("📅 ").append(payload.get("departureDate")).append("\n\n");
         text.append("👤 From: ").append(payload.get("senderFirstName")).append("\n\n");
         text.append("_Open the app to accept or decline._");
+
+        TelegramMessage message = new TelegramMessage();
+        message.setText(text.toString());
+        message.setParseMode("Markdown");
+
+        return message;
+    }
+
+    private TelegramMessage formatTripCancelled(Map<String, Object> payload) {
+        StringBuilder text = new StringBuilder();
+        text.append("❌ *Trip cancelled by traveler*\n\n");
+        text.append("📦 ").append(payload.get("itemDescription")).append("\n");
+        text.append("✈️ ").append(payload.get("route")).append("\n");
+        text.append("📅 ").append(payload.get("departureDate")).append("\n\n");
+
+        String reason = (String) payload.get("reason");
+        if (reason != null && !reason.isBlank() && !"No reason provided".equals(reason)) {
+            text.append("*Reason:* ").append(reason).append("\n\n");
+        }
+
+        text.append("_Your request has been automatically cancelled. ");
+        text.append("You can search for other travelers going to your destination._");
 
         TelegramMessage message = new TelegramMessage();
         message.setText(text.toString());

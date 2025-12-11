@@ -120,6 +120,13 @@ public class ItemRequestService {
         ir.setStatus(RequestStatus.ACCEPTED);
         itemRequestRepository.save(ir);
 
+        // Increment traveler's accepted requests count (for completion rate tracking)
+        User traveler = ir.getTrip().getUser();
+        traveler.setAcceptedRequestsCount(
+                (traveler.getAcceptedRequestsCount() != null ? traveler.getAcceptedRequestsCount() : 0) + 1
+        );
+        userRepository.save(traveler);
+
         // Send notification to sender with traveler contact info
         sendRequestAcceptedNotification(ir);
 

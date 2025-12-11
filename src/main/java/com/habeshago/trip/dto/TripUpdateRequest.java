@@ -5,16 +5,17 @@ import com.habeshago.trip.ContactMethod;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.FutureOrPresent;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
-public class TripCreateRequest {
+/**
+ * Request DTO for updating a trip.
+ * All fields are optional - only provided fields will be updated.
+ */
+public class TripUpdateRequest {
 
-    @NotBlank
     @Size(max = 100, message = "City name must be at most 100 characters")
     private String fromCity;
 
@@ -24,7 +25,6 @@ public class TripCreateRequest {
     @Size(max = 10, message = "Airport code must be at most 10 characters")
     private String fromAirportCode;
 
-    @NotBlank
     @Size(max = 100, message = "City name must be at most 100 characters")
     private String toCity;
 
@@ -34,13 +34,11 @@ public class TripCreateRequest {
     @Size(max = 10, message = "Airport code must be at most 10 characters")
     private String toAirportCode;
 
-    @NotNull
     @FutureOrPresent(message = "Departure date must be today or in the future")
     private LocalDate departureDate;
 
     private LocalDate arrivalDate;
 
-    @NotNull
     private CapacityType capacityType;
 
     @DecimalMin(value = "0.1", message = "Max weight must be at least 0.1 kg")
@@ -50,10 +48,9 @@ public class TripCreateRequest {
     @Size(max = 1000, message = "Notes must be at most 1000 characters")
     private String notes;
 
-    @NotNull(message = "Contact method is required")
     private ContactMethod contactMethod;
 
-    // getters and setters
+    // Getters and setters
     public String getFromCity() { return fromCity; }
     public void setFromCity(String fromCity) { this.fromCity = fromCity; }
     public String getFromCountry() { return fromCountry; }

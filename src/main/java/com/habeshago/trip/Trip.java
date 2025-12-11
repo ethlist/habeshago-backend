@@ -63,6 +63,16 @@ public class Trip {
     @Column(name = "status", nullable = false, length = 20)
     private TripStatus status = TripStatus.OPEN;
 
+    @Column(name = "cancellation_reason", length = 500)
+    private String cancellationReason;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "contact_method", length = 20)
+    private ContactMethod contactMethod;
+
+    @Column(name = "contact_value", length = 50)
+    private String contactValue;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -124,6 +134,15 @@ public class Trip {
 
     public TripStatus getStatus() { return status; }
     public void setStatus(TripStatus status) { this.status = status; }
+
+    public String getCancellationReason() { return cancellationReason; }
+    public void setCancellationReason(String cancellationReason) { this.cancellationReason = cancellationReason; }
+
+    public ContactMethod getContactMethod() { return contactMethod; }
+    public void setContactMethod(ContactMethod contactMethod) { this.contactMethod = contactMethod; }
+
+    public String getContactValue() { return contactValue; }
+    public void setContactValue(String contactValue) { this.contactValue = contactValue; }
 
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
