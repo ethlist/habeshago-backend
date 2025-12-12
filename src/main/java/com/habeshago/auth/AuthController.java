@@ -138,8 +138,8 @@ public class AuthController {
         }
 
         // Username is always synced from Telegram (not editable by user in the app)
-        if (telegramUser.username() != null &&
-                !telegramUser.username().equals(user.getUsername())) {
+        // Use Objects.equals to handle null properly - if user removes their Telegram username, DB should reflect that
+        if (!java.util.Objects.equals(telegramUser.username(), user.getUsername())) {
             user.setUsername(telegramUser.username());
             changed = true;
         }
