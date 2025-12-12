@@ -2,6 +2,7 @@ package com.habeshago.trip;
 
 import com.habeshago.user.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -31,4 +32,13 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
             @Param("departureDate") LocalDate departureDate,
             @Param("status") String status
     );
+
+    /**
+     * Update contact_value for all trips by a user that use TELEGRAM as contact method.
+     * Called when user's Telegram username changes to keep contact info in sync.
+     */
+    @Modifying
+    @Query("UPDATE Trip t SET t.contactValue = :newUsername, t.updatedAt = CURRENT_TIMESTAMP " +
+           "WHERE t.user.id = :userId AND t.contactMethod = 'TELEGRAM'")
+    int updateTelegramContactValue(@Param("userId") Long userId, @Param("newUsername") String newUsername);
 }

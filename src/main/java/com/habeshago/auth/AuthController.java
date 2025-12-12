@@ -6,22 +6,31 @@ import com.habeshago.auth.dto.TelegramWebAuthRequest;
 import com.habeshago.auth.dto.WebLoginRequest;
 import com.habeshago.auth.dto.WebRegisterRequest;
 import com.habeshago.common.SecurityAuditLogger;
+import com.habeshago.request.ItemRequestRepository;
+import com.habeshago.trip.TripRepository;
 import com.habeshago.user.User;
 import com.habeshago.user.UserDto;
 import com.habeshago.user.UserRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
+
     private final TelegramAuthService telegramAuthService;
     private final JwtService jwtService;
     private final UserRepository userRepository;
+    private final TripRepository tripRepository;
+    private final ItemRequestRepository itemRequestRepository;
     private final WebAuthService webAuthService;
     private final RateLimitService rateLimitService;
     private final SecurityAuditLogger securityAuditLogger;
@@ -30,18 +39,23 @@ public class AuthController {
             TelegramAuthService telegramAuthService,
             JwtService jwtService,
             UserRepository userRepository,
+            TripRepository tripRepository,
+            ItemRequestRepository itemRequestRepository,
             WebAuthService webAuthService,
             RateLimitService rateLimitService,
             SecurityAuditLogger securityAuditLogger) {
         this.telegramAuthService = telegramAuthService;
         this.jwtService = jwtService;
         this.userRepository = userRepository;
+        this.tripRepository = tripRepository;
+        this.itemRequestRepository = itemRequestRepository;
         this.webAuthService = webAuthService;
         this.rateLimitService = rateLimitService;
         this.securityAuditLogger = securityAuditLogger;
     }
 
     @PostMapping("/telegram")
+    @Transactional
     public ResponseEntity<AuthResponse> authenticateWithTelegram(
             @Valid @RequestBody TelegramAuthRequest request) {
 
@@ -53,7 +67,7 @@ public class AuthController {
         User user = userRepository.findByTelegramUserId(telegramUser.telegramUserId())
                 .orElseGet(() -> createNewUser(telegramUser));
 
-        // Update user info if changed
+        // Update user info if changed (including syncing contact values on trips/requests)
         updateUserInfo(user, telegramUser);
 
         // Generate JWT token
@@ -68,6 +82,7 @@ public class AuthController {
      * individual fields and uses a different hash algorithm.
      */
     @PostMapping("/telegram-web")
+    @Transactional
     public ResponseEntity<AuthResponse> authenticateWithTelegramWeb(
             @Valid @RequestBody TelegramWebAuthRequest request,
             HttpServletRequest httpRequest) {
@@ -121,6 +136,8 @@ public class AuthController {
 
     private void updateUserInfo(User user, TelegramAuthService.TelegramUserData telegramUser) {
         boolean changed = false;
+        boolean usernameChanged = false;
+        String oldUsername = user.getUsername();
 
         // Only update firstName and lastName from Telegram if user hasn't manually edited their profile
         if (!Boolean.TRUE.equals(user.getProfileEditedByUser())) {
@@ -142,10 +159,30 @@ public class AuthController {
         if (!java.util.Objects.equals(telegramUser.username(), user.getUsername())) {
             user.setUsername(telegramUser.username());
             changed = true;
+            usernameChanged = true;
         }
 
         if (changed) {
             userRepository.save(user);
+        }
+
+        // If username changed, update contact values on all trips and requests that use Telegram
+        if (usernameChanged) {
+            syncTelegramContactValues(user.getId(), telegramUser.username(), oldUsername);
+        }
+    }
+
+    /**
+     * Sync contact values on trips and item requests when user's Telegram username changes.
+     * This ensures users can still be contacted via their current username.
+     */
+    private void syncTelegramContactValues(Long userId, String newUsername, String oldUsername) {
+        int tripsUpdated = tripRepository.updateTelegramContactValue(userId, newUsername);
+        int requestsUpdated = itemRequestRepository.updateSenderTelegramContactValue(userId, newUsername);
+
+        if (tripsUpdated > 0 || requestsUpdated > 0) {
+            log.info("Synced Telegram contact values for user {}: {} trips, {} requests updated (username: {} -> {})",
+                    userId, tripsUpdated, requestsUpdated, oldUsername, newUsername);
         }
     }
 

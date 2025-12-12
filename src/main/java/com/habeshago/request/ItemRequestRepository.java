@@ -3,6 +3,7 @@ package com.habeshago.request;
 import com.habeshago.trip.Trip;
 import com.habeshago.user.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -25,4 +26,13 @@ public interface ItemRequestRepository extends JpaRepository<ItemRequest, Long> 
     // Count delivered requests for a traveler (for reputation)
     @Query("SELECT COUNT(r) FROM ItemRequest r WHERE r.trip.user.id = :travelerId AND r.status = 'DELIVERED'")
     long countDeliveredByTravelerId(@Param("travelerId") Long travelerId);
+
+    /**
+     * Update sender_contact_value for all requests by a user that use TELEGRAM as contact method.
+     * Called when user's Telegram username changes to keep contact info in sync.
+     */
+    @Modifying
+    @Query("UPDATE ItemRequest r SET r.senderContactValue = :newUsername, r.updatedAt = CURRENT_TIMESTAMP " +
+           "WHERE r.senderUser.id = :userId AND r.senderContactMethod = 'TELEGRAM'")
+    int updateSenderTelegramContactValue(@Param("userId") Long userId, @Param("newUsername") String newUsername);
 }
