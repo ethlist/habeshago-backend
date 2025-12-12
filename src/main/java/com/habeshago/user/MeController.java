@@ -32,14 +32,7 @@ public class MeController {
         return user;
     }
 
-    /**
-     * Get current user's profile.
-     */
-    @GetMapping
-    public ResponseEntity<UserDto> getCurrentUser(HttpServletRequest request) {
-        User user = requireCurrentUser(request);
-        return ResponseEntity.ok(UserDto.from(user));
-    }
+    // Note: GET /api/me is already in TripController
 
     /**
      * Get current user's contact method settings.
