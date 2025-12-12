@@ -5,6 +5,8 @@ import java.time.Instant;
 public record UserDto(
         String id,
         Long telegramUserId,
+        String googleId,
+        String googleEmail,
         String firstName,
         String lastName,
         String username,
@@ -22,12 +24,24 @@ public record UserDto(
         Boolean phoneVerified,
         String idType,
         String verificationRejectionReason,
-        Integer verificationAttempts
+        Integer verificationAttempts,
+        // Identity verification (OAuth provider)
+        Boolean identityVerified,
+        String identityProvider,
+        // Contact method preferences
+        String phoneNumber,
+        Boolean contactTelegramEnabled,
+        Boolean contactPhoneEnabled,
+        Boolean hasAtLeastOneContactMethod,
+        // Trust system
+        Integer trustScore
 ) {
     public static UserDto from(User user) {
         return new UserDto(
                 user.getId().toString(),
                 user.getTelegramUserId(),
+                user.getGoogleId(),
+                user.getGoogleEmail(),
                 user.getFirstName(),
                 user.getLastName(),
                 user.getUsername(),
@@ -44,7 +58,14 @@ public record UserDto(
                 user.getPhoneVerified(),
                 user.getIdType() != null ? user.getIdType().name() : null,
                 user.getVerificationRejectionReason(),
-                user.getVerificationAttempts()
+                user.getVerificationAttempts(),
+                user.getIdentityVerified(),
+                user.getIdentityProvider(),
+                user.getPhoneNumber(),
+                user.getContactTelegramEnabled(),
+                user.getContactPhoneEnabled(),
+                user.hasAtLeastOneContactMethod(),
+                user.getTrustScore()
         );
     }
 }

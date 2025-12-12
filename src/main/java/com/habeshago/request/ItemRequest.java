@@ -46,12 +46,24 @@ public class ItemRequest {
     @Column(name = "status", nullable = false, length = 20)
     private RequestStatus status = RequestStatus.PENDING;
 
+    // Legacy single contact method fields (kept for backward compatibility)
     @Enumerated(EnumType.STRING)
     @Column(name = "sender_contact_method", length = 20)
     private ContactMethod senderContactMethod;
 
     @Column(name = "sender_contact_value", length = 50)
     private String senderContactValue;
+
+    // New multiple contact method fields
+    @Column(name = "sender_contact_telegram", length = 50)
+    private String senderContactTelegram;
+
+    @Column(name = "sender_contact_phone", length = 20)
+    private String senderContactPhone;
+
+    // Track when contact was revealed (set when request is accepted)
+    @Column(name = "contact_revealed_at")
+    private Instant contactRevealedAt;
 
     @Column(name = "paid", nullable = false)
     private Boolean paid = false;
@@ -108,6 +120,31 @@ public class ItemRequest {
 
     public String getSenderContactValue() { return senderContactValue; }
     public void setSenderContactValue(String senderContactValue) { this.senderContactValue = senderContactValue; }
+
+    public String getSenderContactTelegram() { return senderContactTelegram; }
+    public void setSenderContactTelegram(String senderContactTelegram) { this.senderContactTelegram = senderContactTelegram; }
+
+    public String getSenderContactPhone() { return senderContactPhone; }
+    public void setSenderContactPhone(String senderContactPhone) { this.senderContactPhone = senderContactPhone; }
+
+    public Instant getContactRevealedAt() { return contactRevealedAt; }
+    public void setContactRevealedAt(Instant contactRevealedAt) { this.contactRevealedAt = contactRevealedAt; }
+
+    /**
+     * Check if request has at least one sender contact method set.
+     */
+    public boolean hasAtLeastOneSenderContactMethod() {
+        boolean hasTelegram = senderContactTelegram != null && !senderContactTelegram.isBlank();
+        boolean hasPhone = senderContactPhone != null && !senderContactPhone.isBlank();
+        return hasTelegram || hasPhone;
+    }
+
+    /**
+     * Check if contact info should be revealed based on request status.
+     */
+    public boolean isContactRevealed() {
+        return status == RequestStatus.ACCEPTED || contactRevealedAt != null;
+    }
 
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }

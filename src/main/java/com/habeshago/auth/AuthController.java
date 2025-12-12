@@ -1,10 +1,12 @@
 package com.habeshago.auth;
 
 import com.habeshago.auth.dto.AuthResponse;
+import com.habeshago.auth.dto.GoogleAuthRequest;
 import com.habeshago.auth.dto.TelegramAuthRequest;
 import com.habeshago.auth.dto.TelegramWebAuthRequest;
 import com.habeshago.auth.dto.WebLoginRequest;
 import com.habeshago.auth.dto.WebRegisterRequest;
+import com.habeshago.common.NotFoundException;
 import com.habeshago.common.SecurityAuditLogger;
 import com.habeshago.request.ItemRequestRepository;
 import com.habeshago.trip.TripRepository;
@@ -27,6 +29,7 @@ public class AuthController {
     private static final Logger log = LoggerFactory.getLogger(AuthController.class);
 
     private final TelegramAuthService telegramAuthService;
+    private final GoogleAuthService googleAuthService;
     private final JwtService jwtService;
     private final UserRepository userRepository;
     private final TripRepository tripRepository;
@@ -37,6 +40,7 @@ public class AuthController {
 
     public AuthController(
             TelegramAuthService telegramAuthService,
+            GoogleAuthService googleAuthService,
             JwtService jwtService,
             UserRepository userRepository,
             TripRepository tripRepository,
@@ -45,6 +49,7 @@ public class AuthController {
             RateLimitService rateLimitService,
             SecurityAuditLogger securityAuditLogger) {
         this.telegramAuthService = telegramAuthService;
+        this.googleAuthService = googleAuthService;
         this.jwtService = jwtService;
         this.userRepository = userRepository;
         this.tripRepository = tripRepository;
@@ -124,6 +129,105 @@ public class AuthController {
         }
     }
 
+    // ----- Google OAuth Authentication -----
+
+    /**
+     * Authenticate using Google Sign-In.
+     * Creates a new account if user doesn't exist, otherwise logs in existing user.
+     */
+    @PostMapping("/google")
+    @Transactional
+    public ResponseEntity<AuthResponse> authenticateWithGoogle(
+            @Valid @RequestBody GoogleAuthRequest request,
+            HttpServletRequest httpRequest) {
+
+        String ipAddress = getClientIpAddress(httpRequest);
+
+        // Use login rate limiting
+        if (!rateLimitService.isLoginAllowed(ipAddress)) {
+            int retryAfter = rateLimitService.getLockoutRemainingSeconds(ipAddress);
+            securityAuditLogger.logRateLimitExceeded(ipAddress, "/api/auth/google", retryAfter);
+            throw new RateLimitService.RateLimitExceededException(
+                    "Too many login attempts. Please try again later.", retryAfter);
+        }
+
+        try {
+            // Validate Google ID token
+            GoogleAuthService.GoogleUserData googleUser =
+                    googleAuthService.validateAndParseIdToken(request.idToken());
+
+            // Find or create user
+            User user = userRepository.findByGoogleId(googleUser.googleId())
+                    .orElseGet(() -> createNewGoogleUser(googleUser));
+
+            // Update user info if changed
+            updateGoogleUserInfo(user, googleUser);
+
+            // Generate JWT token
+            String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
+
+            // Clear rate limit attempts on success
+            rateLimitService.clearLoginAttempts(ipAddress);
+            securityAuditLogger.logLoginSuccess(ipAddress, String.valueOf(user.getId()), "google:" + googleUser.googleId());
+
+            return ResponseEntity.ok(new AuthResponse(token, UserDto.from(user)));
+        } catch (SecurityException e) {
+            rateLimitService.recordLoginAttempt(ipAddress);
+            securityAuditLogger.logLoginFailure(ipAddress, "google:unknown", e.getMessage());
+            throw new InvalidGoogleAuthException(e.getMessage());
+        }
+    }
+
+    private User createNewGoogleUser(GoogleAuthService.GoogleUserData googleUser) {
+        User user = new User();
+        user.setGoogleId(googleUser.googleId());
+        user.setGoogleEmail(googleUser.email());
+        user.setFirstName(googleUser.givenName());
+        user.setLastName(googleUser.familyName());
+        user.setPreferredLanguage("en");
+
+        // Google users are identity-verified
+        user.setIdentityVerified(true);
+        user.setIdentityProvider("GOOGLE");
+
+        log.info("Created new user from Google sign-in: {} ({})", googleUser.email(), googleUser.googleId());
+        return userRepository.save(user);
+    }
+
+    private void updateGoogleUserInfo(User user, GoogleAuthService.GoogleUserData googleUser) {
+        boolean changed = false;
+
+        // Update email if changed
+        if (googleUser.email() != null && !googleUser.email().equals(user.getGoogleEmail())) {
+            user.setGoogleEmail(googleUser.email());
+            changed = true;
+        }
+
+        // Only update name from Google if user hasn't manually edited their profile
+        if (!Boolean.TRUE.equals(user.getProfileEditedByUser())) {
+            if (googleUser.givenName() != null && !googleUser.givenName().equals(user.getFirstName())) {
+                user.setFirstName(googleUser.givenName());
+                changed = true;
+            }
+
+            if (googleUser.familyName() != null && !googleUser.familyName().equals(user.getLastName())) {
+                user.setLastName(googleUser.familyName());
+                changed = true;
+            }
+        }
+
+        // Ensure identity verified is set (for users created before this feature)
+        if (!Boolean.TRUE.equals(user.getIdentityVerified())) {
+            user.setIdentityVerified(true);
+            user.setIdentityProvider("GOOGLE");
+            changed = true;
+        }
+
+        if (changed) {
+            userRepository.save(user);
+        }
+    }
+
     private User createNewUser(TelegramAuthService.TelegramUserData telegramUser) {
         User user = new User();
         user.setTelegramUserId(telegramUser.telegramUserId());
@@ -131,6 +235,16 @@ public class AuthController {
         user.setLastName(telegramUser.lastName());
         user.setUsername(telegramUser.username());
         user.setPreferredLanguage(mapLanguageCode(telegramUser.languageCode()));
+
+        // Telegram users are identity-verified
+        user.setIdentityVerified(true);
+        user.setIdentityProvider("TELEGRAM");
+
+        // Auto-enable Telegram contact if username is available
+        if (telegramUser.username() != null && !telegramUser.username().isBlank()) {
+            user.setContactTelegramEnabled(true);
+        }
+
         return userRepository.save(user);
     }
 
@@ -197,6 +311,99 @@ public class AuthController {
         }
         // Default to English
         return "en";
+    }
+
+    // ----- Account Linking Endpoints -----
+
+    /**
+     * Link a Telegram account to an existing user account.
+     * User must be authenticated via JWT.
+     */
+    @PostMapping("/link-telegram")
+    @Transactional
+    public ResponseEntity<UserDto> linkTelegramAccount(
+            @RequestAttribute("userId") Long userId,
+            @Valid @RequestBody TelegramWebAuthRequest request,
+            HttpServletRequest httpRequest) {
+
+        String ipAddress = getClientIpAddress(httpRequest);
+
+        // Validate Telegram data
+        TelegramAuthService.TelegramUserData telegramUser =
+                telegramAuthService.validateAndParseWebLogin(request);
+
+        // Check if this Telegram account is already linked to another user
+        var existingUser = userRepository.findByTelegramUserId(telegramUser.telegramUserId());
+        if (existingUser.isPresent() && !existingUser.get().getId().equals(userId)) {
+            throw new AccountLinkingException("This Telegram account is already linked to another user");
+        }
+
+        // Get the current user
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // Check if user already has a Telegram account linked
+        if (user.getTelegramUserId() != null) {
+            throw new AccountLinkingException("Your account already has a Telegram account linked");
+        }
+
+        // Link the Telegram account
+        user.setTelegramUserId(telegramUser.telegramUserId());
+        user.setUsername(telegramUser.username());
+
+        // Auto-enable Telegram contact if username is available
+        if (telegramUser.username() != null && !telegramUser.username().isBlank()) {
+            user.setContactTelegramEnabled(true);
+        }
+
+        userRepository.save(user);
+        log.info("Linked Telegram account {} to user {} (IP: {})",
+                telegramUser.telegramUserId(), userId, ipAddress);
+
+        return ResponseEntity.ok(UserDto.from(user));
+    }
+
+    /**
+     * Link a Google account to an existing user account.
+     * User must be authenticated via JWT.
+     */
+    @PostMapping("/link-google")
+    @Transactional
+    public ResponseEntity<UserDto> linkGoogleAccount(
+            @RequestAttribute("userId") Long userId,
+            @Valid @RequestBody GoogleAuthRequest request,
+            HttpServletRequest httpRequest) {
+
+        String ipAddress = getClientIpAddress(httpRequest);
+
+        // Validate Google token
+        GoogleAuthService.GoogleUserData googleUser =
+                googleAuthService.validateAndParseIdToken(request.idToken());
+
+        // Check if this Google account is already linked to another user
+        var existingUser = userRepository.findByGoogleId(googleUser.googleId());
+        if (existingUser.isPresent() && !existingUser.get().getId().equals(userId)) {
+            throw new AccountLinkingException("This Google account is already linked to another user");
+        }
+
+        // Get the current user
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // Check if user already has a Google account linked
+        if (user.getGoogleId() != null) {
+            throw new AccountLinkingException("Your account already has a Google account linked");
+        }
+
+        // Link the Google account
+        user.setGoogleId(googleUser.googleId());
+        user.setGoogleEmail(googleUser.email());
+
+        userRepository.save(user);
+        log.info("Linked Google account {} to user {} (IP: {})",
+                googleUser.googleId(), userId, ipAddress);
+
+        return ResponseEntity.ok(UserDto.from(user));
     }
 
     // ----- Web Authentication Endpoints -----
@@ -303,6 +510,12 @@ public class AuthController {
                 .body(new ErrorResponse(401, ex.getMessage()));
     }
 
+    @ExceptionHandler(InvalidGoogleAuthException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidGoogleAuth(InvalidGoogleAuthException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(new ErrorResponse(401, ex.getMessage()));
+    }
+
     public record ErrorResponse(int code, String message) {}
     public record RateLimitErrorResponse(int code, String message, int retryAfterSeconds) {}
 
@@ -310,5 +523,29 @@ public class AuthController {
         public InvalidTelegramAuthException(String message) {
             super(message);
         }
+    }
+
+    public static class InvalidGoogleAuthException extends RuntimeException {
+        public InvalidGoogleAuthException(String message) {
+            super(message);
+        }
+    }
+
+    public static class AccountLinkingException extends RuntimeException {
+        public AccountLinkingException(String message) {
+            super(message);
+        }
+    }
+
+    @ExceptionHandler(AccountLinkingException.class)
+    public ResponseEntity<ErrorResponse> handleAccountLinking(AccountLinkingException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse(409, ex.getMessage()));
+    }
+
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(NotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse(404, ex.getMessage()));
     }
 }

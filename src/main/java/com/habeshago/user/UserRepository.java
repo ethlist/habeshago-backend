@@ -10,9 +10,15 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByTelegramUserId(Long telegramUserId);
 
+    Optional<User> findByGoogleId(String googleId);
+
     // Case-insensitive email lookup
     @Query("SELECT u FROM User u WHERE LOWER(u.email) = LOWER(:email)")
     Optional<User> findByEmail(@Param("email") String email);
+
+    // Case-insensitive Google email lookup
+    @Query("SELECT u FROM User u WHERE LOWER(u.googleEmail) = LOWER(:email)")
+    Optional<User> findByGoogleEmail(@Param("email") String email);
 
     // Case-insensitive email existence check
     @Query("SELECT COUNT(u) > 0 FROM User u WHERE LOWER(u.email) = LOWER(:email)")

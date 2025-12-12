@@ -66,12 +66,20 @@ public class Trip {
     @Column(name = "cancellation_reason", length = 500)
     private String cancellationReason;
 
+    // Legacy single contact method fields (kept for backward compatibility)
     @Enumerated(EnumType.STRING)
     @Column(name = "contact_method", length = 20)
     private ContactMethod contactMethod;
 
     @Column(name = "contact_value", length = 50)
     private String contactValue;
+
+    // New multiple contact method fields
+    @Column(name = "contact_telegram", length = 50)
+    private String contactTelegram;
+
+    @Column(name = "contact_phone", length = 20)
+    private String contactPhone;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -143,6 +151,21 @@ public class Trip {
 
     public String getContactValue() { return contactValue; }
     public void setContactValue(String contactValue) { this.contactValue = contactValue; }
+
+    public String getContactTelegram() { return contactTelegram; }
+    public void setContactTelegram(String contactTelegram) { this.contactTelegram = contactTelegram; }
+
+    public String getContactPhone() { return contactPhone; }
+    public void setContactPhone(String contactPhone) { this.contactPhone = contactPhone; }
+
+    /**
+     * Check if trip has at least one contact method set.
+     */
+    public boolean hasAtLeastOneContactMethod() {
+        boolean hasTelegram = contactTelegram != null && !contactTelegram.isBlank();
+        boolean hasPhone = contactPhone != null && !contactPhone.isBlank();
+        return hasTelegram || hasPhone;
+    }
 
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
