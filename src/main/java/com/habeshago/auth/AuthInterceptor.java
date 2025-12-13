@@ -114,9 +114,9 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private boolean isPublicEndpoint(String path) {
         // Auth endpoints that are public (login/register)
-        // Note: /api/auth/link-* endpoints require authentication
+        // Note: /api/auth/link-* and /api/auth/unlink-* endpoints require authentication
         if (path.startsWith("/api/auth/")) {
-            return !path.startsWith("/api/auth/link-");
+            return !path.startsWith("/api/auth/link-") && !path.startsWith("/api/auth/unlink-");
         }
         return path.equals("/api/trips/search") ||
                path.startsWith("/api/travelers/") ||

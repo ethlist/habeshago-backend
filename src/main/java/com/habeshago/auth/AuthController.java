@@ -8,8 +8,10 @@ import com.habeshago.auth.dto.WebLoginRequest;
 import com.habeshago.auth.dto.WebRegisterRequest;
 import com.habeshago.common.NotFoundException;
 import com.habeshago.common.SecurityAuditLogger;
+import com.habeshago.config.RetentionConfig;
 import com.habeshago.request.ItemRequestRepository;
 import com.habeshago.trip.TripRepository;
+import com.habeshago.user.DeletionReason;
 import com.habeshago.user.User;
 import com.habeshago.user.UserDto;
 import com.habeshago.user.UserRepository;
@@ -21,6 +23,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -37,6 +43,8 @@ public class AuthController {
     private final WebAuthService webAuthService;
     private final RateLimitService rateLimitService;
     private final SecurityAuditLogger securityAuditLogger;
+    private final OAuthIdRecordRepository oAuthIdRecordRepository;
+    private final RetentionConfig retentionConfig;
 
     public AuthController(
             TelegramAuthService telegramAuthService,
@@ -47,7 +55,9 @@ public class AuthController {
             ItemRequestRepository itemRequestRepository,
             WebAuthService webAuthService,
             RateLimitService rateLimitService,
-            SecurityAuditLogger securityAuditLogger) {
+            SecurityAuditLogger securityAuditLogger,
+            OAuthIdRecordRepository oAuthIdRecordRepository,
+            RetentionConfig retentionConfig) {
         this.telegramAuthService = telegramAuthService;
         this.googleAuthService = googleAuthService;
         this.jwtService = jwtService;
@@ -57,23 +67,65 @@ public class AuthController {
         this.webAuthService = webAuthService;
         this.rateLimitService = rateLimitService;
         this.securityAuditLogger = securityAuditLogger;
+        this.oAuthIdRecordRepository = oAuthIdRecordRepository;
+        this.retentionConfig = retentionConfig;
     }
 
+    /**
+     * Authenticate using Telegram Mini App.
+     * - If user is already authenticated (JWT present), auto-link Telegram to their account
+     * - If Telegram ID belongs to deleted account within recovery period, restore it
+     * - Otherwise, create new account or login to existing
+     */
     @PostMapping("/telegram")
     @Transactional
     public ResponseEntity<AuthResponse> authenticateWithTelegram(
-            @Valid @RequestBody TelegramAuthRequest request) {
+            @Valid @RequestBody TelegramAuthRequest request,
+            @RequestAttribute(value = "userId", required = false) Long currentUserId) {
 
         // Validate and parse Telegram initData
         TelegramAuthService.TelegramUserData telegramUser =
                 telegramAuthService.validateAndParseInitData(request.initData());
 
+        // Check if user is already authenticated (auto-link scenario)
+        if (currentUserId != null) {
+            return handleTelegramAutoLink(currentUserId, telegramUser, "mini-app");
+        }
+
+        // Check OAuth tracking for blocked/deleted status
+        Optional<OAuthIdRecord> oauthRecord = oAuthIdRecordRepository.findByTelegramUserId(telegramUser.telegramUserId());
+        if (oauthRecord.isPresent() && oauthRecord.get().isBlocked()) {
+            OAuthIdRecord record = oauthRecord.get();
+            if (Boolean.TRUE.equals(record.getPermanentlyBlocked())) {
+                throw new AccountBlockedException("This account has been permanently banned");
+            }
+            throw new AccountBlockedException("Account recreation is blocked until " + record.getBlockedUntil());
+        }
+
+        // Check for soft-deleted account that can be restored
+        Optional<User> existingUser = userRepository.findByTelegramUserId(telegramUser.telegramUserId());
+        if (existingUser.isPresent() && Boolean.TRUE.equals(existingUser.get().getDeleted())) {
+            User user = existingUser.get();
+            if (user.getDeletedAt() != null &&
+                    user.getDeletedAt().isAfter(Instant.now().minus(retentionConfig.getAccountRecoveryDays(), ChronoUnit.DAYS))) {
+                if (user.getDeletionReason() == DeletionReason.ADMIN_BAN ||
+                        user.getDeletionReason() == DeletionReason.SUSPENDED) {
+                    throw new AccountBlockedException("This account has been permanently banned");
+                }
+                return restoreDeletedAccountViaTelegram(user, telegramUser, "mini-app");
+            }
+        }
+
         // Find or create user
         User user = userRepository.findByTelegramUserId(telegramUser.telegramUserId())
+                .filter(u -> !Boolean.TRUE.equals(u.getDeleted()))
                 .orElseGet(() -> createNewUser(telegramUser));
 
         // Update user info if changed (including syncing contact values on trips/requests)
         updateUserInfo(user, telegramUser);
+
+        // Ensure OAuth tracking record exists
+        ensureOAuthRecord(user);
 
         // Generate JWT token
         String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
@@ -83,13 +135,15 @@ public class AuthController {
 
     /**
      * Authenticate using Telegram Login Widget (for web users).
-     * This is different from the Mini App authentication - the widget sends
-     * individual fields and uses a different hash algorithm.
+     * - If user is already authenticated (JWT present), auto-link Telegram to their account
+     * - If Telegram ID belongs to deleted account within recovery period, restore it
+     * - Otherwise, create new account or login to existing
      */
     @PostMapping("/telegram-web")
     @Transactional
     public ResponseEntity<AuthResponse> authenticateWithTelegramWeb(
             @Valid @RequestBody TelegramWebAuthRequest request,
+            @RequestAttribute(value = "userId", required = false) Long currentUserId,
             HttpServletRequest httpRequest) {
 
         String ipAddress = getClientIpAddress(httpRequest);
@@ -107,12 +161,47 @@ public class AuthController {
             TelegramAuthService.TelegramUserData telegramUser =
                     telegramAuthService.validateAndParseWebLogin(request);
 
+            // Check if user is already authenticated (auto-link scenario)
+            if (currentUserId != null) {
+                rateLimitService.clearLoginAttempts(ipAddress);
+                return handleTelegramAutoLink(currentUserId, telegramUser, ipAddress);
+            }
+
+            // Check OAuth tracking for blocked/deleted status
+            Optional<OAuthIdRecord> oauthRecord = oAuthIdRecordRepository.findByTelegramUserId(telegramUser.telegramUserId());
+            if (oauthRecord.isPresent() && oauthRecord.get().isBlocked()) {
+                OAuthIdRecord record = oauthRecord.get();
+                if (Boolean.TRUE.equals(record.getPermanentlyBlocked())) {
+                    throw new AccountBlockedException("This account has been permanently banned");
+                }
+                throw new AccountBlockedException("Account recreation is blocked until " + record.getBlockedUntil());
+            }
+
+            // Check for soft-deleted account that can be restored
+            Optional<User> existingUser = userRepository.findByTelegramUserId(telegramUser.telegramUserId());
+            if (existingUser.isPresent() && Boolean.TRUE.equals(existingUser.get().getDeleted())) {
+                User user = existingUser.get();
+                if (user.getDeletedAt() != null &&
+                        user.getDeletedAt().isAfter(Instant.now().minus(retentionConfig.getAccountRecoveryDays(), ChronoUnit.DAYS))) {
+                    if (user.getDeletionReason() == DeletionReason.ADMIN_BAN ||
+                            user.getDeletionReason() == DeletionReason.SUSPENDED) {
+                        throw new AccountBlockedException("This account has been permanently banned");
+                    }
+                    rateLimitService.clearLoginAttempts(ipAddress);
+                    return restoreDeletedAccountViaTelegram(user, telegramUser, ipAddress);
+                }
+            }
+
             // Find or create user
             User user = userRepository.findByTelegramUserId(telegramUser.telegramUserId())
+                    .filter(u -> !Boolean.TRUE.equals(u.getDeleted()))
                     .orElseGet(() -> createNewUser(telegramUser));
 
             // Update user info if changed
             updateUserInfo(user, telegramUser);
+
+            // Ensure OAuth tracking record exists
+            ensureOAuthRecord(user);
 
             // Generate JWT token
             String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
@@ -133,12 +222,16 @@ public class AuthController {
 
     /**
      * Authenticate using Google Sign-In.
-     * Creates a new account if user doesn't exist, otherwise logs in existing user.
+     * - If user is already authenticated (JWT present), auto-link Google to their account
+     * - If Google ID belongs to deleted account within recovery period, restore it
+     * - If Google ID is blocked, reject the request
+     * - Otherwise, create new account or login to existing
      */
     @PostMapping("/google")
     @Transactional
     public ResponseEntity<AuthResponse> authenticateWithGoogle(
             @Valid @RequestBody GoogleAuthRequest request,
+            @RequestAttribute(value = "userId", required = false) Long currentUserId,
             HttpServletRequest httpRequest) {
 
         String ipAddress = getClientIpAddress(httpRequest);
@@ -156,12 +249,58 @@ public class AuthController {
             GoogleAuthService.GoogleUserData googleUser =
                     googleAuthService.validateAndParseIdToken(request.idToken());
 
-            // Find or create user
+            // Check if user is already authenticated (auto-link scenario)
+            if (currentUserId != null) {
+                return handleGoogleAutoLink(currentUserId, googleUser, ipAddress);
+            }
+
+            // Check OAuth tracking for blocked/deleted status
+            Optional<OAuthIdRecord> oauthRecord = oAuthIdRecordRepository.findByGoogleId(googleUser.googleId());
+            if (oauthRecord.isPresent()) {
+                OAuthIdRecord record = oauthRecord.get();
+                if (record.isBlocked()) {
+                    if (Boolean.TRUE.equals(record.getPermanentlyBlocked())) {
+                        throw new AccountBlockedException("This account has been permanently banned");
+                    }
+                    throw new AccountBlockedException("Account recreation is blocked until " + record.getBlockedUntil());
+                }
+            }
+
+            // Check for soft-deleted account that can be restored
+            Optional<User> deletedUser = userRepository.findByGoogleId(googleUser.googleId());
+            if (deletedUser.isEmpty()) {
+                // Also check by stored OAuth record
+                deletedUser = oauthRecord
+                        .filter(r -> Boolean.TRUE.equals(r.getDeleted()))
+                        .map(r -> userRepository.findById(r.getUserId()))
+                        .flatMap(opt -> opt);
+            }
+
+            if (deletedUser.isPresent() && Boolean.TRUE.equals(deletedUser.get().getDeleted())) {
+                User user = deletedUser.get();
+                // Check if within recovery period
+                if (user.getDeletedAt() != null &&
+                        user.getDeletedAt().isAfter(Instant.now().minus(retentionConfig.getAccountRecoveryDays(), ChronoUnit.DAYS))) {
+                    // Check deletion reason - banned accounts cannot be restored
+                    if (user.getDeletionReason() == DeletionReason.ADMIN_BAN ||
+                            user.getDeletionReason() == DeletionReason.SUSPENDED) {
+                        throw new AccountBlockedException("This account has been permanently banned");
+                    }
+                    // Restore the account
+                    return restoreDeletedAccount(user, googleUser, ipAddress);
+                }
+            }
+
+            // Find existing active user or create new
             User user = userRepository.findByGoogleId(googleUser.googleId())
+                    .filter(u -> !Boolean.TRUE.equals(u.getDeleted()))
                     .orElseGet(() -> createNewGoogleUser(googleUser));
 
             // Update user info if changed
             updateGoogleUserInfo(user, googleUser);
+
+            // Ensure OAuth tracking record exists
+            ensureOAuthRecord(user);
 
             // Generate JWT token
             String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
@@ -176,6 +315,178 @@ public class AuthController {
             securityAuditLogger.logLoginFailure(ipAddress, "google:unknown", e.getMessage());
             throw new InvalidGoogleAuthException(e.getMessage());
         }
+    }
+
+    /**
+     * Handle auto-linking Google account when user is already authenticated.
+     */
+    private ResponseEntity<AuthResponse> handleGoogleAutoLink(Long currentUserId,
+                                                               GoogleAuthService.GoogleUserData googleUser,
+                                                               String ipAddress) {
+        // Get current user
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // Check if this Google account is already linked to ANY user
+        Optional<User> existingGoogleUser = userRepository.findByGoogleId(googleUser.googleId())
+                .filter(u -> !Boolean.TRUE.equals(u.getDeleted()));
+
+        if (existingGoogleUser.isPresent()) {
+            if (existingGoogleUser.get().getId().equals(currentUserId)) {
+                // Already linked to this user - just return success
+                log.info("Google account {} already linked to user {} (IP: {})",
+                        googleUser.googleId(), currentUserId, ipAddress);
+                String token = jwtService.generateToken(currentUser.getId(), currentUser.getTelegramUserId());
+                return ResponseEntity.ok(new AuthResponse(token, UserDto.from(currentUser)));
+            } else {
+                // Linked to different user
+                throw new AccountLinkingException("This Google account is already linked to another user");
+            }
+        }
+
+        // Check if current user already has Google linked
+        if (currentUser.getGoogleId() != null) {
+            throw new AccountLinkingException("Your account already has a Google account linked");
+        }
+
+        // Link the Google account
+        currentUser.setGoogleId(googleUser.googleId());
+        currentUser.setGoogleEmail(googleUser.email());
+        userRepository.save(currentUser);
+
+        // Update OAuth tracking
+        ensureOAuthRecord(currentUser);
+
+        log.info("Auto-linked Google account {} to user {} (IP: {})",
+                googleUser.googleId(), currentUserId, ipAddress);
+
+        String token = jwtService.generateToken(currentUser.getId(), currentUser.getTelegramUserId());
+        return ResponseEntity.ok(new AuthResponse(token, UserDto.from(currentUser)));
+    }
+
+    /**
+     * Restore a soft-deleted account.
+     */
+    private ResponseEntity<AuthResponse> restoreDeletedAccount(User user,
+                                                                GoogleAuthService.GoogleUserData googleUser,
+                                                                String ipAddress) {
+        // Restore the account
+        user.setDeleted(false);
+        user.setDeletedAt(null);
+        user.setDeletionReason(null);
+
+        // Restore Google credentials if they were cleared
+        if (user.getGoogleId() == null) {
+            user.setGoogleId(googleUser.googleId());
+        }
+        if (user.getGoogleEmail() == null) {
+            user.setGoogleEmail(googleUser.email());
+        }
+
+        userRepository.save(user);
+
+        // Update OAuth tracking
+        oAuthIdRecordRepository.findByGoogleId(googleUser.googleId()).ifPresent(record -> {
+            record.setDeleted(false);
+            record.setDeletedAt(null);
+            record.setBlockedUntil(null);
+            oAuthIdRecordRepository.save(record);
+        });
+
+        log.info("Restored deleted account {} via Google sign-in (IP: {})", user.getId(), ipAddress);
+        securityAuditLogger.logLoginSuccess(ipAddress, String.valueOf(user.getId()), "google:" + googleUser.googleId() + ":restored");
+
+        String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
+        return ResponseEntity.ok(new AuthResponse(token, UserDto.from(user), true)); // restored=true
+    }
+
+    /**
+     * Handle auto-linking Telegram account when user is already authenticated.
+     */
+    private ResponseEntity<AuthResponse> handleTelegramAutoLink(Long currentUserId,
+                                                                 TelegramAuthService.TelegramUserData telegramUser,
+                                                                 String ipAddress) {
+        // Get current user
+        User currentUser = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // Check if this Telegram account is already linked to ANY user
+        Optional<User> existingTelegramUser = userRepository.findByTelegramUserId(telegramUser.telegramUserId())
+                .filter(u -> !Boolean.TRUE.equals(u.getDeleted()));
+
+        if (existingTelegramUser.isPresent()) {
+            if (existingTelegramUser.get().getId().equals(currentUserId)) {
+                // Already linked to this user - just return success
+                log.info("Telegram account {} already linked to user {} (IP: {})",
+                        telegramUser.telegramUserId(), currentUserId, ipAddress);
+                String token = jwtService.generateToken(currentUser.getId(), currentUser.getTelegramUserId());
+                return ResponseEntity.ok(new AuthResponse(token, UserDto.from(currentUser)));
+            } else {
+                // Linked to different user
+                throw new AccountLinkingException("This Telegram account is already linked to another user");
+            }
+        }
+
+        // Check if current user already has Telegram linked
+        if (currentUser.getTelegramUserId() != null) {
+            throw new AccountLinkingException("Your account already has a Telegram account linked");
+        }
+
+        // Link the Telegram account
+        currentUser.setTelegramUserId(telegramUser.telegramUserId());
+        currentUser.setUsername(telegramUser.username());
+
+        // Auto-enable Telegram contact if username is available
+        if (telegramUser.username() != null && !telegramUser.username().isBlank()) {
+            currentUser.setContactTelegramEnabled(true);
+        }
+
+        userRepository.save(currentUser);
+
+        // Update OAuth tracking
+        ensureOAuthRecord(currentUser);
+
+        log.info("Auto-linked Telegram account {} to user {} (IP: {})",
+                telegramUser.telegramUserId(), currentUserId, ipAddress);
+
+        String token = jwtService.generateToken(currentUser.getId(), currentUser.getTelegramUserId());
+        return ResponseEntity.ok(new AuthResponse(token, UserDto.from(currentUser)));
+    }
+
+    /**
+     * Restore a soft-deleted account via Telegram.
+     */
+    private ResponseEntity<AuthResponse> restoreDeletedAccountViaTelegram(User user,
+                                                                           TelegramAuthService.TelegramUserData telegramUser,
+                                                                           String ipAddress) {
+        // Restore the account
+        user.setDeleted(false);
+        user.setDeletedAt(null);
+        user.setDeletionReason(null);
+
+        // Restore Telegram credentials if they were cleared
+        if (user.getTelegramUserId() == null) {
+            user.setTelegramUserId(telegramUser.telegramUserId());
+        }
+        if (user.getUsername() == null) {
+            user.setUsername(telegramUser.username());
+        }
+
+        userRepository.save(user);
+
+        // Update OAuth tracking
+        oAuthIdRecordRepository.findByTelegramUserId(telegramUser.telegramUserId()).ifPresent(record -> {
+            record.setDeleted(false);
+            record.setDeletedAt(null);
+            record.setBlockedUntil(null);
+            oAuthIdRecordRepository.save(record);
+        });
+
+        log.info("Restored deleted account {} via Telegram sign-in (IP: {})", user.getId(), ipAddress);
+        securityAuditLogger.logLoginSuccess(ipAddress, String.valueOf(user.getId()), "telegram:" + telegramUser.telegramUserId() + ":restored");
+
+        String token = jwtService.generateToken(user.getId(), user.getTelegramUserId());
+        return ResponseEntity.ok(new AuthResponse(token, UserDto.from(user), true)); // restored=true
     }
 
     private User createNewGoogleUser(GoogleAuthService.GoogleUserData googleUser) {
@@ -313,6 +624,32 @@ public class AuthController {
         return "en";
     }
 
+    /**
+     * Ensure OAuth tracking record exists for a user.
+     * Creates or updates the record with current OAuth IDs.
+     */
+    private void ensureOAuthRecord(User user) {
+        // Try to find existing record by Google ID or Telegram ID
+        Optional<OAuthIdRecord> existingRecord = Optional.empty();
+
+        if (user.getGoogleId() != null) {
+            existingRecord = oAuthIdRecordRepository.findByGoogleId(user.getGoogleId());
+        }
+        if (existingRecord.isEmpty() && user.getTelegramUserId() != null) {
+            existingRecord = oAuthIdRecordRepository.findByTelegramUserId(user.getTelegramUserId());
+        }
+        if (existingRecord.isEmpty()) {
+            existingRecord = oAuthIdRecordRepository.findByUserId(user.getId());
+        }
+
+        OAuthIdRecord record = existingRecord.orElseGet(OAuthIdRecord::new);
+        record.setUserId(user.getId());
+        record.setGoogleId(user.getGoogleId());
+        record.setTelegramUserId(user.getTelegramUserId());
+        record.setDeleted(false);
+        oAuthIdRecordRepository.save(record);
+    }
+
     // ----- Account Linking Endpoints -----
 
     /**
@@ -402,6 +739,87 @@ public class AuthController {
         userRepository.save(user);
         log.info("Linked Google account {} to user {} (IP: {})",
                 googleUser.googleId(), userId, ipAddress);
+
+        return ResponseEntity.ok(UserDto.from(user));
+    }
+
+    // ----- Account Unlinking Endpoints -----
+
+    /**
+     * Unlink Google account from user.
+     * Cannot unlink if it's the last connected account.
+     */
+    @DeleteMapping("/unlink-google")
+    @Transactional
+    public ResponseEntity<UserDto> unlinkGoogleAccount(
+            @RequestAttribute("userId") Long userId,
+            HttpServletRequest httpRequest) {
+
+        String ipAddress = getClientIpAddress(httpRequest);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // Check if Google is linked
+        if (user.getGoogleId() == null) {
+            throw new AccountUnlinkingException("No Google account linked");
+        }
+
+        // Check if user has another login method (Telegram)
+        if (user.getTelegramUserId() == null) {
+            throw new AccountUnlinkingException("Cannot unlink last connected account. Link another account first.");
+        }
+
+        // Unlink Google
+        String oldGoogleId = user.getGoogleId();
+        user.setGoogleId(null);
+        user.setGoogleEmail(null);
+        userRepository.save(user);
+
+        // Update OAuth tracking
+        ensureOAuthRecord(user);
+
+        log.info("Unlinked Google account {} from user {} (IP: {})", oldGoogleId, userId, ipAddress);
+
+        return ResponseEntity.ok(UserDto.from(user));
+    }
+
+    /**
+     * Unlink Telegram account from user.
+     * Cannot unlink if it's the last connected account.
+     */
+    @DeleteMapping("/unlink-telegram")
+    @Transactional
+    public ResponseEntity<UserDto> unlinkTelegramAccount(
+            @RequestAttribute("userId") Long userId,
+            HttpServletRequest httpRequest) {
+
+        String ipAddress = getClientIpAddress(httpRequest);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        // Check if Telegram is linked
+        if (user.getTelegramUserId() == null) {
+            throw new AccountUnlinkingException("No Telegram account linked");
+        }
+
+        // Check if user has another login method (Google)
+        if (user.getGoogleId() == null) {
+            throw new AccountUnlinkingException("Cannot unlink last connected account. Link another account first.");
+        }
+
+        // Unlink Telegram
+        Long oldTelegramId = user.getTelegramUserId();
+        user.setTelegramUserId(null);
+        user.setUsername(null);
+        user.setContactTelegramEnabled(false);
+        userRepository.save(user);
+
+        // Update OAuth tracking
+        ensureOAuthRecord(user);
+
+        log.info("Unlinked Telegram account {} from user {} (IP: {})", oldTelegramId, userId, ipAddress);
 
         return ResponseEntity.ok(UserDto.from(user));
     }
@@ -537,10 +955,34 @@ public class AuthController {
         }
     }
 
+    public static class AccountUnlinkingException extends RuntimeException {
+        public AccountUnlinkingException(String message) {
+            super(message);
+        }
+    }
+
+    public static class AccountBlockedException extends RuntimeException {
+        public AccountBlockedException(String message) {
+            super(message);
+        }
+    }
+
     @ExceptionHandler(AccountLinkingException.class)
     public ResponseEntity<ErrorResponse> handleAccountLinking(AccountLinkingException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(new ErrorResponse(409, ex.getMessage()));
+    }
+
+    @ExceptionHandler(AccountUnlinkingException.class)
+    public ResponseEntity<ErrorResponse> handleAccountUnlinking(AccountUnlinkingException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(new ErrorResponse(400, ex.getMessage()));
+    }
+
+    @ExceptionHandler(AccountBlockedException.class)
+    public ResponseEntity<ErrorResponse> handleAccountBlocked(AccountBlockedException ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ErrorResponse(403, ex.getMessage()));
     }
 
     @ExceptionHandler(NotFoundException.class)

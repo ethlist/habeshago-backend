@@ -35,4 +35,13 @@ public interface ItemRequestRepository extends JpaRepository<ItemRequest, Long> 
     @Query("UPDATE ItemRequest r SET r.senderContactValue = :newUsername, r.updatedAt = CURRENT_TIMESTAMP " +
            "WHERE r.senderUser.id = :userId AND r.senderContactMethod = 'TELEGRAM'")
     int updateSenderTelegramContactValue(@Param("userId") Long userId, @Param("newUsername") String newUsername);
+
+    /**
+     * Anonymize requests for a deleted user by clearing contact information.
+     */
+    @Modifying
+    @Query("UPDATE ItemRequest r SET r.senderContactMethod = NULL, r.senderContactValue = NULL, " +
+           "r.senderContactTelegram = NULL, r.senderContactPhone = NULL, r.updatedAt = CURRENT_TIMESTAMP " +
+           "WHERE r.senderUser.id = :userId")
+    int anonymizeUserRequests(@Param("userId") Long userId);
 }

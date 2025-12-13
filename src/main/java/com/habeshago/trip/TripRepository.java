@@ -41,4 +41,13 @@ public interface TripRepository extends JpaRepository<Trip, Long> {
     @Query("UPDATE Trip t SET t.contactValue = :newUsername, t.updatedAt = CURRENT_TIMESTAMP " +
            "WHERE t.user.id = :userId AND t.contactMethod = 'TELEGRAM'")
     int updateTelegramContactValue(@Param("userId") Long userId, @Param("newUsername") String newUsername);
+
+    /**
+     * Anonymize trips for a deleted user by clearing contact information.
+     */
+    @Modifying
+    @Query("UPDATE Trip t SET t.contactMethod = NULL, t.contactValue = NULL, " +
+           "t.contactTelegram = NULL, t.contactPhone = NULL, t.updatedAt = CURRENT_TIMESTAMP " +
+           "WHERE t.user.id = :userId")
+    int anonymizeUserTrips(@Param("userId") Long userId);
 }

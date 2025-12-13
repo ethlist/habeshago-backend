@@ -59,6 +59,26 @@ public class User {
     @Column(name = "suspension_reason", length = 500)
     private String suspensionReason;
 
+    // Soft delete fields
+    @Column(name = "deleted", nullable = false)
+    private Boolean deleted = false;
+
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "deletion_reason", length = 20)
+    private DeletionReason deletionReason;
+
+    @Column(name = "anonymized", nullable = false)
+    private Boolean anonymized = false;
+
+    @Column(name = "anonymized_at")
+    private Instant anonymizedAt;
+
+    @Column(name = "retention_until")
+    private Instant retentionUntil;
+
     // Contact method preferences
     @Column(name = "contact_telegram_enabled", nullable = false)
     private Boolean contactTelegramEnabled = false;
@@ -194,6 +214,24 @@ public class User {
 
     public String getSuspensionReason() { return suspensionReason; }
     public void setSuspensionReason(String suspensionReason) { this.suspensionReason = suspensionReason; }
+
+    public Boolean getDeleted() { return deleted; }
+    public void setDeleted(Boolean deleted) { this.deleted = deleted; }
+
+    public Instant getDeletedAt() { return deletedAt; }
+    public void setDeletedAt(Instant deletedAt) { this.deletedAt = deletedAt; }
+
+    public DeletionReason getDeletionReason() { return deletionReason; }
+    public void setDeletionReason(DeletionReason deletionReason) { this.deletionReason = deletionReason; }
+
+    public Boolean getAnonymized() { return anonymized; }
+    public void setAnonymized(Boolean anonymized) { this.anonymized = anonymized; }
+
+    public Instant getAnonymizedAt() { return anonymizedAt; }
+    public void setAnonymizedAt(Instant anonymizedAt) { this.anonymizedAt = anonymizedAt; }
+
+    public Instant getRetentionUntil() { return retentionUntil; }
+    public void setRetentionUntil(Instant retentionUntil) { this.retentionUntil = retentionUntil; }
 
     public Boolean getContactTelegramEnabled() { return contactTelegramEnabled; }
     public void setContactTelegramEnabled(Boolean contactTelegramEnabled) { this.contactTelegramEnabled = contactTelegramEnabled; }
