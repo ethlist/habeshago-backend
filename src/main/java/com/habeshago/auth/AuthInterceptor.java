@@ -67,6 +67,7 @@ public class AuthInterceptor implements HandlerInterceptor {
                     Optional<User> userOpt = userRepository.findById(userId);
                     if (userOpt.isPresent()) {
                         request.setAttribute(CURRENT_USER_ATTR, userOpt.get());
+                        request.setAttribute("userId", userId);
                         return true;
                     }
                 }
@@ -90,6 +91,7 @@ public class AuthInterceptor implements HandlerInterceptor {
                         return userRepository.save(u);
                     });
                     request.setAttribute(CURRENT_USER_ATTR, user);
+                    request.setAttribute("userId", user.getId());
                     return true;
                 } catch (NumberFormatException ignored) {}
             }
@@ -111,8 +113,12 @@ public class AuthInterceptor implements HandlerInterceptor {
     }
 
     private boolean isPublicEndpoint(String path) {
-        return path.startsWith("/api/auth/") ||
-               path.equals("/api/trips/search") ||
+        // Auth endpoints that are public (login/register)
+        // Note: /api/auth/link-* endpoints require authentication
+        if (path.startsWith("/api/auth/")) {
+            return !path.startsWith("/api/auth/link-");
+        }
+        return path.equals("/api/trips/search") ||
                path.startsWith("/api/travelers/") ||
                path.equals("/api/health") ||
                path.equals("/actuator/health") ||
