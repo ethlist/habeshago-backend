@@ -45,18 +45,14 @@ public class TripService {
 
     @Transactional
     public TripDto createTrip(User currentUser, TripCreateRequest req) {
-        // Validate user can transact (has at least one contact method)
-        validateCanTransact(currentUser);
+        // Validate user has at least one contact method enabled
+        validateHasContactMethod(currentUser);
 
         // Validate arrival date is on or after departure date
         if (req.getArrivalDate() != null && req.getDepartureDate() != null
                 && req.getArrivalDate().isBefore(req.getDepartureDate())) {
             throw new BadRequestException("Arrival date cannot be before departure date");
         }
-
-        // Validate contact method and determine contact value
-        ContactMethod contactMethod = req.getContactMethod();
-        String contactValue = resolveContactValue(currentUser, contactMethod);
 
         Trip trip = new Trip();
         trip.setUser(currentUser);
@@ -72,36 +68,44 @@ public class TripService {
         trip.setMaxWeightKg(req.getMaxWeightKg());
         trip.setNotes(req.getNotes());
         trip.setStatus(TripStatus.OPEN);
-        trip.setContactMethod(contactMethod);
-        trip.setContactValue(contactValue);
+
+        // Set new multiple contact fields from user's enabled contact methods
+        if (Boolean.TRUE.equals(currentUser.getContactTelegramEnabled()) && currentUser.getUsername() != null) {
+            trip.setContactTelegram(currentUser.getUsername());
+        }
+        if (Boolean.TRUE.equals(currentUser.getContactPhoneEnabled()) && currentUser.getPhoneNumber() != null) {
+            trip.setContactPhone(currentUser.getPhoneNumber());
+        }
+
+        // Also set legacy fields for backward compatibility (can be removed later)
+        if (req.getContactMethod() != null) {
+            trip.setContactMethod(req.getContactMethod());
+            trip.setContactValue(resolveContactValue(currentUser, req.getContactMethod()));
+        } else {
+            // Default to first available contact method for legacy support
+            if (trip.getContactTelegram() != null) {
+                trip.setContactMethod(ContactMethod.TELEGRAM);
+                trip.setContactValue(trip.getContactTelegram());
+            } else if (trip.getContactPhone() != null) {
+                trip.setContactMethod(ContactMethod.PHONE);
+                trip.setContactValue(trip.getContactPhone());
+            }
+        }
 
         Trip saved = tripRepository.save(trip);
         return TripDto.from(saved);
     }
 
     /**
-     * Validates that a user can create trips.
-     *
-     * For Telegram users: Must have at least one contact method (username OR verified phone)
-     * For Email users: Must have verified phone
+     * Validates that a user has at least one contact method enabled.
+     * Uses the new contact method preference system.
      */
-    private void validateCanTransact(User user) {
-        if (user.getTelegramUserId() != null) {
-            // Telegram user: needs at least one contact method
-            boolean hasUsername = user.getUsername() != null && !user.getUsername().isBlank();
-            boolean hasVerifiedPhone = Boolean.TRUE.equals(user.getPhoneVerified());
-
-            if (!hasUsername && !hasVerifiedPhone) {
-                throw new BadRequestException(
-                    "Please add a phone number to continue. " +
-                    "Telegram users without a username must verify a phone number."
-                );
-            }
-        } else {
-            // Email user: must have verified phone
-            if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
-                throw new BadRequestException("Phone verification required to create trips");
-            }
+    private void validateHasContactMethod(User user) {
+        if (!user.hasAtLeastOneContactMethod()) {
+            throw new BadRequestException(
+                "You need at least one contact method to create trips. " +
+                "Please enable Telegram or Phone in your contact settings."
+            );
         }
     }
 

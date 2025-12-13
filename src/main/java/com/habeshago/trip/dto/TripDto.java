@@ -24,9 +24,12 @@ public record TripDto(
         String notes,
         String status,
         String cancellationReason,
-        // Contact method info
+        // Legacy contact method info (for backward compatibility)
         String contactMethod,
         String contactValue,
+        // New multiple contact method fields
+        String contactTelegram,
+        String contactPhone,
         Instant createdAt,
         Instant updatedAt,
         // Traveler info with reputation
@@ -79,6 +82,8 @@ public record TripDto(
                 trip.getCancellationReason(),
                 trip.getContactMethod() != null ? trip.getContactMethod().name() : null,
                 trip.getContactValue(),
+                trip.getContactTelegram(),
+                trip.getContactPhone(),
                 trip.getCreatedAt(),
                 trip.getUpdatedAt(),
                 includeTraveler && trip.getUser() != null ? TravelerInfoDto.from(trip.getUser()) : null,
@@ -91,7 +96,7 @@ public record TripDto(
 
     /**
      * Creates a new TripDto with contact information masked.
-     * Used for unauthenticated users viewing trip details.
+     * Used for unauthenticated users or when contact should be hidden.
      */
     public TripDto withMaskedContact() {
         return new TripDto(
@@ -112,6 +117,8 @@ public record TripDto(
                 cancellationReason,
                 null,  // mask contactMethod
                 null,  // mask contactValue
+                null,  // mask contactTelegram
+                null,  // mask contactPhone
                 createdAt,
                 updatedAt,
                 traveler,

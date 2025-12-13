@@ -19,6 +19,7 @@ import com.habeshago.request.dto.ItemRequestDto;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -47,12 +48,8 @@ public class ItemRequestService {
 
     @Transactional
     public ItemRequestDto createRequest(User sender, Long tripId, ItemRequestCreateRequest req) {
-        // Validate user can transact (has at least one contact method)
-        validateCanTransact(sender);
-
-        // Validate contact method availability
-        ContactMethod contactMethod = req.getContactMethod();
-        String contactValue = resolveContactValue(sender, contactMethod);
+        // Validate user has at least one contact method enabled
+        validateHasContactMethod(sender);
 
         Trip trip = tripRepository.findById(tripId)
                 .orElseThrow(() -> new NotFoundException("Trip not found"));
@@ -68,8 +65,29 @@ public class ItemRequestService {
         ir.setWeightKg(req.getWeightKg());
         ir.setSpecialInstructions(req.getSpecialInstructions());
         ir.setStatus(RequestStatus.PENDING);
-        ir.setSenderContactMethod(contactMethod);
-        ir.setSenderContactValue(contactValue);
+
+        // Set new multiple contact fields from sender's enabled contact methods
+        if (Boolean.TRUE.equals(sender.getContactTelegramEnabled()) && sender.getUsername() != null) {
+            ir.setSenderContactTelegram(sender.getUsername());
+        }
+        if (Boolean.TRUE.equals(sender.getContactPhoneEnabled()) && sender.getPhoneNumber() != null) {
+            ir.setSenderContactPhone(sender.getPhoneNumber());
+        }
+
+        // Also set legacy fields for backward compatibility
+        if (req.getContactMethod() != null) {
+            ir.setSenderContactMethod(req.getContactMethod());
+            ir.setSenderContactValue(resolveContactValue(sender, req.getContactMethod()));
+        } else {
+            // Default to first available contact method for legacy support
+            if (ir.getSenderContactTelegram() != null) {
+                ir.setSenderContactMethod(ContactMethod.TELEGRAM);
+                ir.setSenderContactValue(ir.getSenderContactTelegram());
+            } else if (ir.getSenderContactPhone() != null) {
+                ir.setSenderContactMethod(ContactMethod.PHONE);
+                ir.setSenderContactValue(ir.getSenderContactPhone());
+            }
+        }
 
         ItemRequest saved = itemRequestRepository.save(ir);
 
@@ -80,28 +98,15 @@ public class ItemRequestService {
     }
 
     /**
-     * Validates that a user can create requests.
-     *
-     * For Telegram users: Must have at least one contact method (username OR verified phone)
-     * For Email users: Must have verified phone
+     * Validates that a user has at least one contact method enabled.
+     * Uses the new contact method preference system.
      */
-    private void validateCanTransact(User user) {
-        if (user.getTelegramUserId() != null) {
-            // Telegram user: needs at least one contact method
-            boolean hasUsername = user.getUsername() != null && !user.getUsername().isBlank();
-            boolean hasVerifiedPhone = Boolean.TRUE.equals(user.getPhoneVerified());
-
-            if (!hasUsername && !hasVerifiedPhone) {
-                throw new BadRequestException(
-                    "Please add a phone number to continue. " +
-                    "Telegram users without a username must verify a phone number."
-                );
-            }
-        } else {
-            // Email user: must have verified phone
-            if (!Boolean.TRUE.equals(user.getPhoneVerified())) {
-                throw new BadRequestException("Phone verification required to send requests");
-            }
+    private void validateHasContactMethod(User user) {
+        if (!user.hasAtLeastOneContactMethod()) {
+            throw new BadRequestException(
+                "You need at least one contact method to send requests. " +
+                "Please enable Telegram or Phone in your contact settings."
+            );
         }
     }
 
@@ -179,6 +184,7 @@ public class ItemRequestService {
         }
 
         ir.setStatus(RequestStatus.ACCEPTED);
+        ir.setContactRevealedAt(Instant.now());
         itemRequestRepository.save(ir);
 
         // Increment traveler's accepted requests count (for completion rate tracking)
