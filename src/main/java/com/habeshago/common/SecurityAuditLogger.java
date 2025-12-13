@@ -138,6 +138,10 @@ public class SecurityAuditLogger {
             return "***";
         }
         int atIndex = email.indexOf('@');
+        if (atIndex == -1) {
+            // No @ symbol - not a valid email, just mask it
+            return email.substring(0, 2) + "***";
+        }
         if (atIndex <= 2) {
             return "***" + email.substring(atIndex);
         }
